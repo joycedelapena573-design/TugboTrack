@@ -1,9 +1,10 @@
 /**
  * MPIN unlock screen. Required every time the app is opened or brought back
- * from the background (requirement 6.2).
+ * from the background (requirement 6.2). The whole frame — keypad included —
+ * fits on one screen with no scrolling.
  */
 import { useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -75,9 +76,9 @@ export default function MpinLogin() {
 
   return (
     <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      <View style={styles.content}>
         <View style={styles.header}>
-          <BrandMark size={52} />
+          <BrandMark size={46} />
           <View style={{ marginLeft: 12 }}>
             <Text style={styles.brandTitle}>
               TIS <Text style={{ color: colors.blue }}>ClassTrack</Text>
@@ -87,7 +88,7 @@ export default function MpinLogin() {
         </View>
 
         <View style={styles.artWrap}>
-          <LockArt size={170} />
+          <LockArt size={104} />
         </View>
 
         <Text style={styles.title}>Welcome Back{teacherName ? ',' : ''}</Text>
@@ -95,6 +96,9 @@ export default function MpinLogin() {
         <Text style={styles.subtitle}>
           Enter your {MPIN_LENGTH}-digit MPIN to unlock{'\n'}your class records.
         </Text>
+
+        {/* Flexible spacer keeps the keypad low on tall screens and collapses on short ones. */}
+        <View style={{ flex: 1, minHeight: 4 }} />
 
         <PinDots value={pin} />
         {error ? (
@@ -111,57 +115,57 @@ export default function MpinLogin() {
             variant="secondary"
             onPress={() => {}}
             disabled
-            style={{ marginTop: 20, alignSelf: 'center', minWidth: 200 }}
+            style={{ marginTop: 14, alignSelf: 'center', minWidth: 200 }}
           />
-        ) : null}
-
-        <View style={styles.footer}>
-          <Text style={styles.footerText}>Your Class Records, Organized.</Text>
-          <View style={styles.footerDash} />
-        </View>
-      </ScrollView>
+        ) : (
+          <View style={styles.footer}>
+            <Text style={styles.footerText}>Your Class Records, Organized.</Text>
+            <View style={styles.footerDash} />
+          </View>
+        )}
+      </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
-  scroll: { paddingHorizontal: 22, paddingBottom: 30 },
-  header: { flexDirection: 'row', alignItems: 'center', marginTop: 12 },
-  brandTitle: { fontFamily: fonts.extrabold, fontSize: 24, color: colors.navyDark },
-  brandSub: { fontFamily: fonts.regular, fontSize: 14.5, color: colors.textSoft, marginTop: -2 },
-  artWrap: { alignItems: 'center', marginTop: 10 },
+  content: { flex: 1, paddingHorizontal: 22, paddingTop: 6, paddingBottom: 10 },
+  header: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
+  brandTitle: { fontFamily: fonts.extrabold, fontSize: 22, color: colors.navyDark },
+  brandSub: { fontFamily: fonts.regular, fontSize: 13.5, color: colors.textSoft, marginTop: -2 },
+  artWrap: { alignItems: 'center', marginTop: 6 },
   title: {
     fontFamily: fonts.extrabold,
-    fontSize: 28,
+    fontSize: 26,
     color: colors.navyDark,
-    textAlign: 'center',
-    marginTop: 4,
-  },
-  teacher: {
-    fontFamily: fonts.semibold,
-    fontSize: 16,
-    color: colors.blue,
     textAlign: 'center',
     marginTop: 2,
   },
+  teacher: {
+    fontFamily: fonts.semibold,
+    fontSize: 15.5,
+    color: colors.blue,
+    textAlign: 'center',
+    marginTop: 1,
+  },
   subtitle: {
     fontFamily: fonts.regular,
-    fontSize: 15,
+    fontSize: 14.5,
     color: colors.textSoft,
     textAlign: 'center',
-    marginTop: 8,
-    marginBottom: 6,
-    lineHeight: 22,
+    marginTop: 6,
+    marginBottom: 2,
+    lineHeight: 21,
   },
   error: {
     fontFamily: fonts.medium,
-    fontSize: 13.5,
+    fontSize: 13,
     color: colors.red,
     textAlign: 'center',
-    marginBottom: 4,
+    marginBottom: 2,
   },
-  footer: { alignItems: 'center', marginTop: 26 },
-  footerText: { fontFamily: fonts.regular, fontSize: 14, color: colors.textSoft },
-  footerDash: { width: 44, height: 3.5, borderRadius: 2, backgroundColor: colors.blue, marginTop: 8 },
+  footer: { alignItems: 'center', marginTop: 14 },
+  footerText: { fontFamily: fonts.regular, fontSize: 13.5, color: colors.textSoft },
+  footerDash: { width: 44, height: 3.5, borderRadius: 2, backgroundColor: colors.blue, marginTop: 7 },
 });

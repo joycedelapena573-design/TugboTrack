@@ -1,11 +1,10 @@
 /**
- * Class detail: roster (search, add, edit, import) + subjects + quick links
- * to attendance, grades, BMI and reports for this class.
+ * Class detail: quick links to attendance, grades and reports for this class,
+ * plus the roster (search, add one-by-one, import CSV).
  */
 import { useMemo, useState } from 'react';
 import {
   Alert,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -21,7 +20,6 @@ import { initialsOf } from '../../lib/format';
 import { pickStudentCsv, toStudentInput } from '../../lib/importer';
 import { useStore } from '../../lib/store';
 import { colors, fonts, radius, shadow } from '../../lib/theme';
-import { DEFAULT_WEIGHTS } from '../../lib/types';
 
 export default function ClassDetail() {
   const router = useRouter();
@@ -30,12 +28,13 @@ export default function ClassDetail() {
 
   const section = useStore((s) => s.sections[sectionId]);
   const students = useStore((s) => s.students);
-  const subjects = useStore((s) => s.subjects);
   const addStudent = useStore((s) => s.addStudent);
   const bulkAddStudents = useStore((s) => s.bulkAddStudents);
   const setActiveSection = useStore((s) => s.setActiveSection);
 
   const [query, setQuery] = useState('');
+  const [addingStudent, setAddingStudent] = useState(false);
+  const [newName, setNewName] = useState('');
 
   const roster = useMemo(
     () =>
@@ -43,13 +42,6 @@ export default function ClassDetail() {
         .filter((s) => s.sectionId === sectionId)
         .sort((a, b) => a.seatNumber - b.seatNumber),
     [students, sectionId],
-  );
-  const sectionSubjects = useMemo(
-    () =>
-      Object.values(subjects)
-        .filter((s) => s.sectionId === sectionId)
-        .sort((a, b) => a.createdAt - b.createdAt),
-    [subjects, sectionId],
   );
 
   const filtered = useMemo(() => {
@@ -71,37 +63,21 @@ export default function ClassDetail() {
 
   const nextSeat = roster.length ? Math.max(...roster.map((s) => s.seatNumber)) + 1 : 1;
 
-  const onAddManually = () => {
-    // iOS gets a quick one-line prompt; Android opens the full student form.
-    if (Platform.OS === 'ios') {
-      Alert.prompt(
-        'Add Student',
-        'Type the student’s full name',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Add',
-            onPress: (name?: string) => {
-              const trimmed = (name ?? '').trim();
-              if (!trimmed) return;
-              addStudent({
-                sectionId,
-                seatNumber: nextSeat,
-                fullName: trimmed,
-                lrn: '',
-                gender: '',
-                birthday: '',
-                guardianName: '',
-                guardianContact: '',
-              });
-            },
-          },
-        ],
-        'plain-text',
-      );
-      return;
-    }
-    router.push({ pathname: '/student/form', params: { sectionId } });
+  const onDoneAdd = () => {
+    const name = newName.trim();
+    if (!name) return;
+    addStudent({
+      sectionId,
+      seatNumber: nextSeat,
+      fullName: name,
+      lrn: '',
+      gender: '',
+      birthday: '',
+      guardianName: '',
+      guardianContact: '',
+    });
+    setNewName('');
+    setAddingStudent(false);
   };
 
   const onImport = async () => {
@@ -159,59 +135,8 @@ export default function ClassDetail() {
               router.push({ pathname: '/(main)/grades', params: { sectionId } });
             }}
           />
-          <QuickAction icon="body" label="BMI" onPress={() => router.push({ pathname: '/bmi', params: { sectionId } })} />
           <QuickAction icon="document-text" label="Reports" onPress={() => router.push({ pathname: '/reports', params: { sectionId } })} />
         </View>
-
-        {/* Subjects */}
-        <View style={styles.sectionRow}>
-          <Text style={styles.sectionTitle}>Subjects</Text>
-          <Pressable style={styles.smallAdd} onPress={() => router.push({ pathname: '/subject/form', params: { sectionId } })}>
-            <Ionicons name="add" size={16} color={colors.navy} />
-            <Text style={styles.smallAddLabel}>Add</Text>
-          </Pressable>
-        </View>
-        {sectionSubjects.length === 0 ? (
-          <Card style={{ marginBottom: 14 }}>
-            <Text style={styles.emptyInline}>
-              No subjects yet. Add the subjects you teach for this class to start recording grades.
-            </Text>
-          </Card>
-        ) : (
-          sectionSubjects.map((sub) => {
-            const w = sub.weights ?? DEFAULT_WEIGHTS;
-            return (
-              <Pressable
-                key={sub.id}
-                onPress={() =>
-                  router.push({
-                    pathname: '/(main)/grades',
-                    params: { sectionId, subjectId: sub.id },
-                  })
-                }
-              >
-                <Card style={styles.subjectCard}>
-                  <View style={styles.subjectIcon}>
-                    <Ionicons name="book" size={18} color={colors.navy} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.subjectName}>{sub.name}</Text>
-                    <Text style={styles.subjectMeta}>
-                      WW {w.quizzes + w.assignments + w.activities}% · PT {w.performanceTasks}% · QA{' '}
-                      {w.examinations}%
-                    </Text>
-                  </View>
-                  {sub.transmute ? (
-                    <View style={styles.tag}>
-                      <Text style={styles.tagLabel}>Transmute</Text>
-                    </View>
-                  ) : null}
-                  <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
-                </Card>
-              </Pressable>
-            );
-          })
-        )}
 
         {/* Roster */}
         <View style={styles.sectionRow}>
@@ -233,20 +158,47 @@ export default function ClassDetail() {
           ) : null}
         </View>
 
-        <View style={styles.importRow}>
-          <Pressable style={styles.importBtn} onPress={() => router.push({ pathname: '/student/form', params: { sectionId } })}>
-            <Ionicons name="person-add" size={16} color={colors.white} />
-            <Text style={styles.importBtnLabel}>Add Student</Text>
-          </Pressable>
-          <Pressable style={[styles.importBtn, styles.importBtnLight]} onPress={() => void onImport()}>
-            <Ionicons name="document-attach" size={16} color={colors.navy} />
-            <Text style={[styles.importBtnLabel, { color: colors.navy }]}>Import CSV</Text>
-          </Pressable>
-          <Pressable style={[styles.importBtn, styles.importBtnLight]} onPress={onAddManually}>
-            <Ionicons name="create" size={16} color={colors.navy} />
-            <Text style={[styles.importBtnLabel, { color: colors.navy }]}>Quick Type</Text>
-          </Pressable>
-        </View>
+        {addingStudent ? (
+          <View style={styles.addFrame}>
+            <Text style={styles.addFrameTitle}>Type the student’s full name</Text>
+            <TextInput
+              style={styles.addNameInput}
+              placeholder="Last name, First name, M.I."
+              placeholderTextColor={colors.textFaint}
+              value={newName}
+              onChangeText={setNewName}
+              autoFocus
+              autoCorrect={false}
+              autoCapitalize="words"
+            />
+            <View style={styles.addFrameRow}>
+              <Pressable
+                style={[styles.frameBtn, styles.frameBtnGhost]}
+                onPress={() => {
+                  setNewName('');
+                  setAddingStudent(false);
+                }}
+              >
+                <Text style={styles.frameBtnGhostLabel}>Cancel</Text>
+              </Pressable>
+              <Pressable style={[styles.frameBtn, styles.frameBtnPrimary]} onPress={onDoneAdd}>
+                <Ionicons name="checkmark" size={16} color={colors.white} />
+                <Text style={styles.frameBtnLabel}>Done</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : (
+          <View style={styles.importRow}>
+            <Pressable style={styles.importBtn} onPress={() => setAddingStudent(true)}>
+              <Ionicons name="person-add" size={16} color={colors.white} />
+              <Text style={styles.importBtnLabel}>Add Student</Text>
+            </Pressable>
+            <Pressable style={[styles.importBtn, styles.importBtnLight]} onPress={() => void onImport()}>
+              <Ionicons name="document-attach" size={16} color={colors.navy} />
+              <Text style={[styles.importBtnLabel, { color: colors.navy }]}>Import CSV</Text>
+            </Pressable>
+          </View>
+        )}
 
         {filtered.length === 0 ? (
           <EmptyState
@@ -258,11 +210,7 @@ export default function ClassDetail() {
                 : 'Try a different name or LRN.'
             }
             actionLabel={roster.length === 0 ? 'Add a student' : undefined}
-            onAction={
-              roster.length === 0
-                ? () => router.push({ pathname: '/student/form', params: { sectionId } })
-                : undefined
-            }
+            onAction={roster.length === 0 ? () => setAddingStudent(true) : undefined}
           />
         ) : (
           filtered.map((st) => (
@@ -346,7 +294,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  quickLabel: { fontFamily: fonts.semibold, fontSize: 11.5, color: colors.navy },
+  quickLabel: { fontFamily: fonts.semibold, fontSize: 12, color: colors.navy, textAlign: 'center' },
   sectionRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -355,30 +303,42 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   sectionTitle: { fontFamily: fonts.bold, fontSize: 16.5, color: colors.navyDark },
-  smallAdd: {
+  addFrame: {
+    backgroundColor: colors.white,
+    borderWidth: 1.5,
+    borderColor: colors.blue,
+    borderRadius: radius.md,
+    padding: 12,
+    marginBottom: 12,
+    ...shadow.soft,
+  },
+  addFrameTitle: { fontFamily: fonts.semibold, fontSize: 13, color: colors.navyDark, marginBottom: 8 },
+  addNameInput: {
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    backgroundColor: colors.bg,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    fontFamily: fonts.medium,
+    fontSize: 15,
+    color: colors.text,
+  },
+  addFrameRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  frameBtn: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 2,
-    backgroundColor: colors.ice,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: radius.pill,
-  },
-  smallAddLabel: { fontFamily: fonts.semibold, fontSize: 12.5, color: colors.navy },
-  subjectCard: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 10, padding: 14 },
-  subjectIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 14,
-    backgroundColor: colors.ice,
-    alignItems: 'center',
     justifyContent: 'center',
+    gap: 4,
+    minHeight: 44,
+    borderRadius: radius.md,
+    paddingHorizontal: 14,
   },
-  subjectName: { fontFamily: fonts.semibold, fontSize: 15, color: colors.navyDark },
-  subjectMeta: { fontFamily: fonts.regular, fontSize: 12, color: colors.textSoft, marginTop: 1 },
-  tag: { backgroundColor: '#FFF1D6', paddingHorizontal: 8, paddingVertical: 3, borderRadius: radius.pill },
-  tagLabel: { fontFamily: fonts.semibold, fontSize: 10.5, color: colors.amber },
-  emptyInline: { fontFamily: fonts.regular, fontSize: 13, color: colors.textSoft, lineHeight: 19 },
+  frameBtnPrimary: { backgroundColor: colors.navy },
+  frameBtnLabel: { fontFamily: fonts.semibold, fontSize: 14, color: colors.white },
+  frameBtnGhost: { backgroundColor: colors.ice, borderWidth: 1.5, borderColor: colors.border },
+  frameBtnGhostLabel: { fontFamily: fonts.semibold, fontSize: 14, color: colors.navy },
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',

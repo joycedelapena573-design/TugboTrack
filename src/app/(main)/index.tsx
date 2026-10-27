@@ -1,6 +1,6 @@
-/** Home dashboard: greeting, summary stats, and the teacher's classes. */
-import { useMemo } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+/** Home dashboard: greeting, summary stats, search, and the teacher's classes. */
+import { useMemo, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 
@@ -32,6 +32,20 @@ export default function Home() {
   const totalStudents = Object.keys(students).length;
   const today = todayISO();
 
+  // Instant search over grade level, section and school year.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const q = query.trim().toLowerCase();
+  const visibleList = useMemo(() => {
+    if (!q) return sectionList;
+    return sectionList.filter(
+      (s) =>
+        s.gradeLevel.toLowerCase().includes(q) ||
+        s.section.toLowerCase().includes(q) ||
+        s.schoolYear.toLowerCase().includes(q),
+    );
+  }, [sectionList, q]);
+
   return (
     <Screen>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
@@ -56,11 +70,48 @@ export default function Home() {
 
         <View style={styles.sectionHeaderRow}>
           <Text style={styles.sectionTitle}>My Classes</Text>
-          <Pressable style={styles.addButton} onPress={() => router.push('/class/section-form')}>
-            <Ionicons name="add" size={20} color={colors.white} />
-            <Text style={styles.addLabel}>Add Class</Text>
-          </Pressable>
+          <View style={styles.headerActions}>
+            <Pressable
+              style={[styles.searchBtn, searchOpen && styles.searchBtnActive]}
+              onPress={() => {
+                setSearchOpen((o) => {
+                  if (o) setQuery('');
+                  return !o;
+                });
+              }}
+            >
+              <Ionicons
+                name={searchOpen ? 'close' : 'search'}
+                size={18}
+                color={searchOpen ? colors.white : colors.navy}
+              />
+            </Pressable>
+            <Pressable style={styles.addButton} onPress={() => router.push('/class/section-form')}>
+              <Ionicons name="add" size={20} color={colors.white} />
+              <Text style={styles.addLabel}>Add Class</Text>
+            </Pressable>
+          </View>
         </View>
+
+        {searchOpen ? (
+          <View style={styles.searchBox}>
+            <Ionicons name="search" size={18} color={colors.textFaint} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search grade, section or school year"
+              placeholderTextColor={colors.textFaint}
+              value={query}
+              onChangeText={setQuery}
+              autoFocus
+              autoCorrect={false}
+            />
+            {query ? (
+              <Pressable onPress={() => setQuery('')} hitSlop={8}>
+                <Ionicons name="close-circle" size={18} color={colors.textFaint} />
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
 
         {sectionList.length === 0 ? (
           <EmptyState
@@ -70,10 +121,18 @@ export default function Home() {
             actionLabel="Create a class"
             onAction={() => router.push('/class/section-form')}
           />
+        ) : visibleList.length === 0 ? (
+          <EmptyState
+            icon="search-outline"
+            title="No matches"
+            subtitle={`Nothing matches “${query.trim()}”. Try another grade level, section or school year.`}
+          />
         ) : (
-          sectionList.map((sec) => {
+          visibleList.map((sec) => {
             const kids = Object.values(students).filter((st) => st.sectionId === sec.id);
-            const subs = Object.values(subjects).filter((s) => s.sectionId === sec.id);
+            const subs = Object.values(subjects)
+              .filter((s) => s.sectionId === sec.id)
+              .sort((a, b) => a.createdAt - b.createdAt);
             const day = attendance[`${sec.id}::${today}`];
             const marked = day ? Object.keys(day.statuses).length : 0;
             return (
@@ -91,14 +150,15 @@ export default function Home() {
                   </Text>
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.className} numberOfLines={1}>
+                  <Text style={styles.className} numberOfLines={2}>
                     {sec.gradeLevel} — {sec.section}
                   </Text>
-                  <Text style={styles.classMeta}>SY {sec.schoolYear}</Text>
-                  <View style={styles.metaRow}>
-                    <MetaChip icon="people-outline" label={`${kids.length} students`} />
-                    <MetaChip icon="book-outline" label={`${subs.length} subject${subs.length === 1 ? '' : 's'}`} />
-                  </View>
+                  <Text style={styles.classMeta}>
+                    SY {sec.schoolYear} · {kids.length} student{kids.length === 1 ? '' : 's'}
+                  </Text>
+                  <Text style={styles.classSubjects} numberOfLines={1}>
+                    {subs.length ? subs.map((s) => s.name).join(' · ') : 'No subjects yet'}
+                  </Text>
                 </View>
                 <View style={styles.todayWrap}>
                   <Text style={styles.todayLabel}>Today</Text>
@@ -138,15 +198,6 @@ function Stat({
   );
 }
 
-function MetaChip({ icon, label }: { icon: keyof typeof Ionicons.glyphMap; label: string }) {
-  return (
-    <View style={styles.metaChip}>
-      <Ionicons name={icon} size={13} color={colors.textSoft} />
-      <Text style={styles.metaChipLabel}>{label}</Text>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   scroll: { padding: 16, paddingBottom: 32 },
   headerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 18 },
@@ -183,6 +234,31 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   sectionTitle: { fontFamily: fonts.bold, fontSize: 18, color: colors.navyDark },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  searchBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.ice,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchBtnActive: { backgroundColor: colors.navy, borderColor: colors.navy },
+  searchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: colors.white,
+    borderWidth: 1.5,
+    borderColor: colors.blue,
+    borderRadius: radius.md,
+    paddingHorizontal: 12,
+    minHeight: 46,
+    marginBottom: 12,
+  },
+  searchInput: { flex: 1, fontFamily: fonts.medium, fontSize: 14.5, color: colors.text, paddingVertical: 8 },
   addButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -218,17 +294,7 @@ const styles = StyleSheet.create({
   classBadgeLabel: { fontFamily: fonts.bold, fontSize: 13, color: colors.white, textAlign: 'center' },
   className: { fontFamily: fonts.semibold, fontSize: 15.5, color: colors.navyDark },
   classMeta: { fontFamily: fonts.regular, fontSize: 12.5, color: colors.textSoft, marginTop: 1 },
-  metaRow: { flexDirection: 'row', gap: 8, marginTop: 6 },
-  metaChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: colors.bg,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: radius.pill,
-  },
-  metaChipLabel: { fontFamily: fonts.medium, fontSize: 11, color: colors.textSoft },
+  classSubjects: { fontFamily: fonts.medium, fontSize: 12, color: colors.blue, marginTop: 3 },
   todayWrap: { alignItems: 'center' },
   todayLabel: { fontFamily: fonts.regular, fontSize: 10.5, color: colors.textFaint },
   todayValue: { fontFamily: fonts.bold, fontSize: 13 },

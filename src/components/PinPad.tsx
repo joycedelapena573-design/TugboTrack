@@ -1,4 +1,8 @@
-/** Numeric MPIN keypad with dot display (6-digit). */
+/**
+ * Numeric MPIN keypad with dot display (6-digit).
+ * Keys stretch to the available width in four fixed rows, so the whole pad
+ * always fits on screen without scrolling.
+ */
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -24,7 +28,12 @@ export function PinDots({ value }: { value: string }) {
   );
 }
 
-const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'del'];
+const ROWS = [
+  ['1', '2', '3'],
+  ['4', '5', '6'],
+  ['7', '8', '9'],
+  ['', '0', 'del'],
+];
 
 export function PinPad({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const press = (key: string) => {
@@ -40,33 +49,37 @@ export function PinPad({ value, onChange }: { value: string; onChange: (v: strin
 
   return (
     <View style={styles.pad}>
-      {KEYS.map((key, i) => (
-        <Pressable
-          key={`${key}-${i}`}
-          disabled={key === ''}
-          onPress={() => press(key)}
-          style={({ pressed }) => [
-            styles.key,
-            key === '' && { backgroundColor: 'transparent', borderColor: 'transparent' },
-            pressed && key !== '' && { backgroundColor: colors.iceDeep, transform: [{ scale: 0.97 }] },
-          ]}
-        >
-          {key === 'del' ? (
-            <Ionicons name="backspace-outline" size={24} color={colors.navy} />
-          ) : (
-            <Text style={styles.keyLabel}>{key}</Text>
-          )}
-        </Pressable>
+      {ROWS.map((row, r) => (
+        <View key={`row-${r}`} style={styles.padRow}>
+          {row.map((key, i) => (
+            <Pressable
+              key={`${key}-${i}`}
+              disabled={key === ''}
+              onPress={() => press(key)}
+              style={({ pressed }) => [
+                styles.key,
+                key === '' && styles.keyEmpty,
+                pressed && key !== '' && { backgroundColor: colors.iceDeep, transform: [{ scale: 0.97 }] },
+              ]}
+            >
+              {key === 'del' ? (
+                <Ionicons name="backspace-outline" size={24} color={colors.navy} />
+              ) : (
+                <Text style={styles.keyLabel}>{key}</Text>
+              )}
+            </Pressable>
+          ))}
+        </View>
       ))}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  dots: { flexDirection: 'row', justifyContent: 'center', gap: 12, marginVertical: 18 },
+  dots: { flexDirection: 'row', justifyContent: 'center', gap: 11, marginVertical: 12 },
   dot: {
-    width: 15,
-    height: 15,
+    width: 14,
+    height: 14,
     borderRadius: 8,
     borderWidth: 2,
     borderColor: '#B9CEF3',
@@ -74,16 +87,11 @@ const styles = StyleSheet.create({
   },
   dotFilled: { backgroundColor: colors.navy, borderColor: colors.navy },
   dotActive: { borderColor: colors.navy },
-  pad: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    gap: 10,
-    paddingHorizontal: 24,
-  },
+  pad: { width: '100%', gap: 10 },
+  padRow: { flexDirection: 'row', gap: 10, width: '100%' },
   key: {
-    width: 88,
-    height: 62,
+    flex: 1,
+    height: 54,
     borderRadius: radius.md,
     backgroundColor: colors.white,
     borderWidth: 1.5,
@@ -91,5 +99,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  keyLabel: { fontFamily: fonts.semibold, fontSize: 24, color: colors.navyDark },
+  keyEmpty: { backgroundColor: 'transparent', borderColor: 'transparent' },
+  keyLabel: { fontFamily: fonts.semibold, fontSize: 22, color: colors.navyDark },
 });

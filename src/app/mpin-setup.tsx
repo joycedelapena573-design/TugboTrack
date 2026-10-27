@@ -71,7 +71,7 @@ export default function MpinSetup() {
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.header}>
-            <BrandMark size={52} />
+            <BrandMark size={46} />
             <View style={{ marginLeft: 12 }}>
               <Text style={styles.brandTitle}>
                 TIS <Text style={{ color: colors.blue }}>ClassTrack</Text>
@@ -81,7 +81,7 @@ export default function MpinSetup() {
           </View>
 
           <View style={styles.artWrap}>
-            <LockArt size={190} />
+            <LockArt size={100} />
           </View>
 
           <Text style={styles.title}>Set Up Your MPIN</Text>
@@ -97,6 +97,7 @@ export default function MpinSetup() {
             value={name}
             onChangeText={setName}
             autoCapitalize="words"
+            style={styles.tightField}
           />
           <SecureField
             label={`Create ${MPIN_LENGTH}-digit MPIN`}
@@ -120,7 +121,7 @@ export default function MpinSetup() {
             icon="arrow-forward"
             onPress={() => void onSave()}
             loading={saving}
-            style={{ marginTop: 6 }}
+            style={{ marginTop: 2 }}
           />
 
           <View style={styles.footer}>
@@ -135,35 +136,36 @@ export default function MpinSetup() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
-  scroll: { paddingHorizontal: 22, paddingBottom: 28 },
-  header: { flexDirection: 'row', alignItems: 'center', marginTop: 12 },
-  brandTitle: { fontFamily: fonts.extrabold, fontSize: 24, color: colors.navyDark },
-  brandSub: { fontFamily: fonts.regular, fontSize: 14.5, color: colors.textSoft, marginTop: -2 },
-  artWrap: { alignItems: 'center', marginTop: 14 },
+  scroll: { paddingHorizontal: 22, paddingTop: 4, paddingBottom: 14 },
+  header: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
+  brandTitle: { fontFamily: fonts.extrabold, fontSize: 22, color: colors.navyDark },
+  brandSub: { fontFamily: fonts.regular, fontSize: 13.5, color: colors.textSoft, marginTop: -2 },
+  artWrap: { alignItems: 'center', marginTop: 6 },
   title: {
     fontFamily: fonts.extrabold,
-    fontSize: 30,
+    fontSize: 27,
     color: colors.navyDark,
     textAlign: 'center',
-    marginTop: 6,
+    marginTop: 2,
   },
   subtitle: {
     fontFamily: fonts.regular,
-    fontSize: 15,
+    fontSize: 14.5,
     color: colors.textSoft,
     textAlign: 'center',
-    marginTop: 8,
-    marginBottom: 22,
-    lineHeight: 22,
+    marginTop: 6,
+    marginBottom: 12,
+    lineHeight: 21,
   },
+  tightField: { marginBottom: 10 },
   error: {
     fontFamily: fonts.medium,
-    fontSize: 13.5,
+    fontSize: 13,
     color: colors.red,
     textAlign: 'center',
-    marginBottom: 10,
+    marginBottom: 6,
   },
-  footer: { alignItems: 'center', marginTop: 22 },
+  footer: { alignItems: 'center', marginTop: 10 },
   footerText: { fontFamily: fonts.regular, fontSize: 14, color: colors.textSoft },
   footerDash: { width: 44, height: 3.5, borderRadius: 2, backgroundColor: colors.blue, marginTop: 8 },
 });

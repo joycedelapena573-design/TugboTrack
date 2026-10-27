@@ -1,4 +1,8 @@
-/** Main tab shell: Home, Attendance, Grades, More. Re-locks when needed. */
+/**
+ * Main tab shell: Home, Grades, More. Re-locks when needed.
+ * Attendance stays a route here (so the MPIN gate covers it) but is hidden
+ * from the tab bar — it opens from a class's Attendance button.
+ */
 import { Ionicons } from '@expo/vector-icons';
 import { Redirect, Tabs } from 'expo-router';
 
@@ -35,15 +39,7 @@ export default function MainLayout() {
           ),
         }}
       />
-      <Tabs.Screen
-        name="attendance"
-        options={{
-          title: 'Attendance',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="grid" size={size} color={typeof color === 'number' ? colors.navy : (color ?? colors.navy)} />
-          ),
-        }}
-      />
+      <Tabs.Screen name="attendance" options={{ href: null, title: 'Attendance' }} />
       <Tabs.Screen
         name="grades"
         options={{
