@@ -33,6 +33,12 @@
       "expo-sharing",
       "expo-font",
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "TIS ClassTrack accesses your photos so you can set the school logo."
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "image": "./assets/splash-icon.png",

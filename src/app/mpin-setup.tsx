@@ -14,7 +14,8 @@ import {
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { BrandMark, LockArt } from '../components/decor';
+import { LockArt } from '../components/decor';
+import { SchoolLogo } from '../components/SchoolLogo';
 import { AppButton, Field, SecureField } from '../components/ui';
 import { useAppLock } from '../lib/appLock';
 import { MPIN_LENGTH, createMpin, isValidMpin } from '../lib/mpin';
@@ -71,7 +72,7 @@ export default function MpinSetup() {
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.header}>
-            <BrandMark size={46} />
+            <SchoolLogo size={46} circle />
             <View style={{ marginLeft: 12 }}>
               <Text style={styles.brandTitle}>
                 TIS <Text style={{ color: colors.blue }}>ClassTrack</Text>

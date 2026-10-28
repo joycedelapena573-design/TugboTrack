@@ -4,8 +4,11 @@
  */
 import { useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { File, Paths } from 'expo-file-system';
+import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 
+import { SchoolLogo } from '../components/SchoolLogo';
 import { AppButton, Card, Field, PageHeader, Screen, SecureField } from '../components/ui';
 import { autoBackupDirPath } from '../lib/backup';
 import { MPIN_LENGTH, changeMpin, isValidMpin } from '../lib/mpin';
@@ -17,8 +20,12 @@ export default function Settings() {
   const teacherName = useStore((s) => s.teacherName);
   const setTeacherName = useStore((s) => s.setTeacherName);
   const students = useStore((s) => s.students);
+  const schoolLogoUri = useStore((s) => s.schoolLogoUri);
+  const setSchoolLogo = useStore((s) => s.setSchoolLogo);
 
   const [name, setName] = useState(teacherName);
+  const [pickingLogo, setPickingLogo] = useState(false);
+  const [logoMessage, setLogoMessage] = useState('');
   const [oldPin, setOldPin] = useState('');
   const [newPin, setNewPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
@@ -32,6 +39,38 @@ export default function Settings() {
     }
     setTeacherName(name);
     setMessage('Teacher name saved.');
+  };
+
+  /** Let the teacher insert the actual school logo picture from their gallery. */
+  const onPickLogo = async () => {
+    setLogoMessage('');
+    try {
+      setPickingLogo(true);
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Photo access needed', 'Allow photo access so you can choose your school logo.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.85,
+      });
+      if (result.canceled || !result.assets?.[0]) return;
+      const asset = result.assets[0];
+      const ext = (asset.fileName ?? asset.uri).match(/\.[A-Za-z0-9]+$/)?.[0] ?? '.jpg';
+      // Copy out of the picker's cache so the logo survives restarts.
+      const dest = new File(Paths.document, `school-logo${ext}`);
+      if (dest.exists) await dest.delete();
+      await new File(asset.uri).copy(dest);
+      setSchoolLogo(dest.uri);
+      setLogoMessage('School logo updated — it now appears on the loading and MPIN screens.');
+    } catch {
+      Alert.alert('Could not use that picture', 'Please try choosing a different image.');
+    } finally {
+      setPickingLogo(false);
+    }
   };
 
   const onChangeMpin = async () => {
@@ -88,6 +127,38 @@ export default function Settings() {
               autoCapitalize="words"
             />
             <AppButton label="Save Name" variant="secondary" icon="checkmark" onPress={onSaveName} />
+          </Card>
+
+          <Text style={styles.sectionTitle}>School Logo</Text>
+          <Card>
+            <View style={styles.logoRow}>
+              <SchoolLogo size={76} style={styles.logoPreview} />
+              <View style={styles.logoInfo}>
+                <Text style={styles.storageLabel}>
+                  Shown on the loading screen and both MPIN screens.
+                </Text>
+                <Text style={styles.logoHint}>
+                  {schoolLogoUri ? 'Your own picture is in use' : 'Using the default school seal'}
+                </Text>
+              </View>
+            </View>
+            {logoMessage ? <Text style={styles.logoMessage}>{logoMessage}</Text> : null}
+            <AppButton
+              label="Insert School Logo"
+              variant="secondary"
+              icon="image"
+              onPress={() => void onPickLogo()}
+              loading={pickingLogo}
+            />
+            {schoolLogoUri ? (
+              <AppButton
+                label="Use Default Logo"
+                variant="ghost"
+                icon="refresh"
+                onPress={() => setSchoolLogo(null)}
+                style={{ marginTop: 10 }}
+              />
+            ) : null}
           </Card>
 
           <Text style={styles.sectionTitle}>Change MPIN</Text>
@@ -176,6 +247,24 @@ const styles = StyleSheet.create({
   },
   storageLabel: { fontFamily: fonts.regular, fontSize: 13, color: colors.textSoft },
   storageValue: { fontFamily: fonts.semibold, fontSize: 13, color: colors.navyDark },
+  logoRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 14 },
+  logoPreview: {
+    width: 76,
+    height: 76,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    backgroundColor: colors.bg,
+  },
+  logoInfo: { flex: 1, gap: 4 },
+  logoHint: { fontFamily: fonts.semibold, fontSize: 12.5, color: colors.blue },
+  logoMessage: {
+    fontFamily: fonts.medium,
+    fontSize: 12.5,
+    color: colors.green,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
   aboutTitle: { fontFamily: fonts.bold, fontSize: 15, color: colors.navyDark },
   aboutText: { fontFamily: fonts.regular, fontSize: 12.5, color: colors.textSoft, marginTop: 6, lineHeight: 19 },
 });

@@ -8,7 +8,8 @@ import { StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { BrandMark, LockArt } from '../components/decor';
+import { LockArt } from '../components/decor';
+import { SchoolLogo } from '../components/SchoolLogo';
 import { PinDots, PinPad } from '../components/PinPad';
 import { AppButton } from '../components/ui';
 import { useAppLock } from '../lib/appLock';
@@ -78,7 +79,7 @@ export default function MpinLogin() {
     <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
       <View style={styles.content}>
         <View style={styles.header}>
-          <BrandMark size={46} />
+          <SchoolLogo size={46} circle />
           <View style={{ marginLeft: 12 }}>
             <Text style={styles.brandTitle}>
               TIS <Text style={{ color: colors.blue }}>ClassTrack</Text>

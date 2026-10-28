@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 
 import { Card, EmptyState, PageHeader, Screen } from '../../components/ui';
+import { SeatBoard } from '../../components/SeatBoard';
 import { initialsOf } from '../../lib/format';
 import { pickStudentCsv, toStudentInput } from '../../lib/importer';
 import { useStore } from '../../lib/store';
@@ -34,6 +35,7 @@ export default function ClassDetail() {
 
   const [query, setQuery] = useState('');
   const [addingStudent, setAddingStudent] = useState(false);
+  const [attendanceOpen, setAttendanceOpen] = useState(true);
   const [newName, setNewName] = useState('');
 
   const roster = useMemo(
@@ -122,9 +124,10 @@ export default function ClassDetail() {
           <QuickAction
             icon="calendar"
             label="Attendance"
+            active={attendanceOpen}
             onPress={() => {
               setActiveSection(sectionId);
-              router.push({ pathname: '/(main)/attendance', params: { sectionId } });
+              setAttendanceOpen((open) => !open);
             }}
           />
           <QuickAction
@@ -137,6 +140,17 @@ export default function ClassDetail() {
           />
           <QuickAction icon="document-text" label="Reports" onPress={() => router.push({ pathname: '/reports', params: { sectionId } })} />
         </View>
+
+        {/* Seat-tap attendance lives right here on the class screen. */}
+        {attendanceOpen ? (
+          <SeatBoard
+            sectionId={sectionId}
+            onOpenFull={() => {
+              setActiveSection(sectionId);
+              router.push({ pathname: '/(main)/attendance', params: { sectionId } });
+            }}
+          />
+        ) : null}
 
         {/* Roster */}
         <View style={styles.sectionRow}>
@@ -227,6 +241,13 @@ export default function ClassDetail() {
                     {st.lrn ? `LRN ${st.lrn}` : 'No LRN yet'}
                   </Text>
                 </View>
+                <Pressable
+                  style={styles.bmiBtn}
+                  onPress={() => router.push({ pathname: '/bmi', params: { sectionId, studentId: st.id } })}
+                >
+                  <Ionicons name="body" size={13} color={colors.navy} />
+                  <Text style={styles.bmiBtnLabel}>BMI</Text>
+                </Pressable>
                 <View style={styles.avatar}>
                   <Text style={styles.avatarLabel}>{initialsOf(st.fullName)}</Text>
                 </View>
@@ -247,13 +268,15 @@ function QuickAction({
   icon,
   label,
   onPress,
+  active,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
   onPress: () => void;
+  active?: boolean;
 }) {
   return (
-    <Pressable style={styles.quickAction} onPress={onPress}>
+    <Pressable style={[styles.quickAction, active && styles.quickActionActive]} onPress={onPress}>
       <View style={styles.quickIcon}>
         <Ionicons name={icon} size={20} color={colors.navy} />
       </View>
@@ -295,6 +318,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   quickLabel: { fontFamily: fonts.semibold, fontSize: 12, color: colors.navy, textAlign: 'center' },
+  quickActionActive: { borderWidth: 2, borderColor: colors.navy, backgroundColor: colors.ice },
+  bmiBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: colors.ice,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+  },
+  bmiBtnLabel: { fontFamily: fonts.semibold, fontSize: 11, color: colors.navy },
   sectionRow: {
     flexDirection: 'row',
     alignItems: 'center',

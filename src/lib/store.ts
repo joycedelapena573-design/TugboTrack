@@ -48,9 +48,12 @@ export interface ClassTrackState {
   attendance: Record<string, AttendanceDay>;
   bmi: Record<string, BmiRecord>;
   activeSectionId: string | null;
+  /** Teacher-chosen school logo file (file:// uri), null = bundled default. */
+  schoolLogoUri: string | null;
 
   setTeacherName: (name: string) => void;
   setActiveSection: (id: string | null) => void;
+  setSchoolLogo: (uri: string | null) => void;
 
   addSection: (input: { gradeLevel: string; section: string; schoolYear: string }) => Section;
   updateSection: (id: string, patch: Partial<Omit<Section, 'id'>>) => void;
@@ -111,10 +114,15 @@ export const useStore = create<ClassTrackState>()(
         attendance: {},
         bmi: {},
         activeSectionId: null,
+        schoolLogoUri: null,
 
         setTeacherName: (name) => {
           set({ teacherName: name.trim() });
           backup();
+        },
+
+        setSchoolLogo: (uri) => {
+          set({ schoolLogoUri: uri });
         },
 
         setActiveSection: (id) => set({ activeSectionId: id }),
@@ -447,6 +455,7 @@ export const useStore = create<ClassTrackState>()(
         attendance: s.attendance,
         bmi: s.bmi,
         activeSectionId: s.activeSectionId,
+        schoolLogoUri: s.schoolLogoUri,
       }),
       onRehydrateStorage: () => (state) => {
         useStore.setState({ hydrated: true });

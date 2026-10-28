@@ -4,7 +4,7 @@
  * year, and subjects are entered together with the class.
  */
 import { useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 
@@ -15,6 +15,54 @@ import { currentSchoolYear } from '../../lib/types';
 
 /** This app is intended for senior high students only. */
 const GRADE_OPTIONS = ['Grade 11', 'Grade 12'];
+
+/** School years the teacher can choose from, up to 2050-2051 (requirement: until 2050). */
+const YEAR_OPTIONS: string[] = Array.from({ length: 2050 - 2020 + 1 }, (_, i) => {
+  const y = 2020 + i;
+  return `${y}-${y + 1}`;
+});
+
+/** Common senior-high subjects the teacher can pick instead of typing. */
+const SUBJECT_SUGGESTIONS: string[] = [
+  'Oral Communication',
+  'Komunikasyon at Pananaliksik',
+  'General Mathematics',
+  'Earth and Life Science',
+  'Personal Development',
+  'Physical Education and Health',
+  'Understanding Culture, Society and Politics',
+  '21st Century Literature from the Philippines and the World',
+  'Empowerment Technologies',
+  'Media and Information Literacy',
+  'Practical Research 1 (Qualitative)',
+  'Practical Research 2 (Quantitative)',
+  'Statistics and Probability',
+  'General Chemistry 1',
+  'General Chemistry 2',
+  'General Biology 1',
+  'General Biology 2',
+  'General Physics 1',
+  'General Physics 2',
+  'Pre-Calculus',
+  'Basic Calculus',
+  'Applied Economics',
+  'Business Math',
+  'Organization and Management',
+  'Enterprise Development',
+  'Contemporary Philippine Arts from the Regions',
+  'Creative Writing',
+  'English for Academic and Professional Purposes',
+  'Filipino sa Piling Larangan',
+  'Research Project',
+  'Developmental Psychology',
+  'Community Engagement, Solidarity and Citizenship',
+  'Philippine Politics and Governance',
+  'The Global Economy',
+  'Bread and Pastry Production',
+  'Computer Systems Servicing',
+  'Caregiving',
+  'Food and Beverage Services',
+];
 
 export default function SectionForm() {
   const router = useRouter();
@@ -35,6 +83,8 @@ export default function SectionForm() {
   const [schoolYear, setSchoolYear] = useState(existing?.schoolYear ?? present);
   const [yearOpen, setYearOpen] = useState(false);
   const [subjectDraft, setSubjectDraft] = useState('');
+  const [subjectSheet, setSubjectSheet] = useState(false);
+  const [subjectQuery, setSubjectQuery] = useState('');
   const [pendingSubjects, setPendingSubjects] = useState<string[]>([]);
   const [error, setError] = useState('');
 
@@ -44,12 +94,12 @@ export default function SectionForm() {
       ? [existing.gradeLevel, ...GRADE_OPTIONS]
       : GRADE_OPTIONS;
 
+  /** Every school year from 2020-2021 up to 2050-2051, plus an older one being edited. */
   const yearOptions = useMemo(() => {
-    const base = Number(present.slice(0, 4));
-    const list = [base + 2, base + 1, base, base - 1, base - 2].map((y) => `${y}-${y + 1}`);
-    return existing && !list.includes(existing.schoolYear)
-      ? [existing.schoolYear, ...list]
-      : list;
+    const list = [...YEAR_OPTIONS];
+    if (existing && !list.includes(existing.schoolYear)) list.unshift(existing.schoolYear);
+    if (!list.includes(present)) list.unshift(present);
+    return list;
   }, [present, existing]);
 
   const existingSubjects = useMemo(() => {
@@ -64,6 +114,27 @@ export default function SectionForm() {
     if (!name) return;
     setPendingSubjects((list) => (list.some((s) => s.toLowerCase() === name.toLowerCase()) ? list : [...list, name]));
     setSubjectDraft('');
+  };
+
+  const suggestions = useMemo(() => {
+    const q = subjectQuery.trim().toLowerCase();
+    return q ? SUBJECT_SUGGESTIONS.filter((s) => s.toLowerCase().includes(q)) : SUBJECT_SUGGESTIONS;
+  }, [subjectQuery]);
+
+  const isChosen = (name: string) => {
+    const lower = name.toLowerCase();
+    return (
+      pendingSubjects.some((s) => s.toLowerCase() === lower) ||
+      existingSubjects.some((s) => s.name.toLowerCase() === lower)
+    );
+  };
+
+  const toggleSuggestion = (name: string) => {
+    setPendingSubjects((list) =>
+      list.some((s) => s.toLowerCase() === name.toLowerCase())
+        ? list.filter((s) => s.toLowerCase() !== name.toLowerCase())
+        : [...list, name],
+    );
   };
 
   const onSave = () => {
@@ -141,7 +212,12 @@ export default function SectionForm() {
         </Pressable>
 
         {yearOpen ? (
-          <View style={styles.yearMenu}>
+          <ScrollView
+            style={styles.yearMenu}
+            contentContainerStyle={styles.yearMenuContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={true}
+          >
             {yearOptions.map((y) => {
               const active = schoolYear === y;
               return (
@@ -164,7 +240,7 @@ export default function SectionForm() {
                 </Pressable>
               );
             })}
-          </View>
+          </ScrollView>
         ) : null}
 
         <Text style={[styles.label, { marginTop: 18 }]}>Subjects</Text>
@@ -179,12 +255,19 @@ export default function SectionForm() {
             returnKeyType="done"
             autoCapitalize="words"
           />
-          <Pressable style={styles.subjectAdd} onPress={addSubjectDraft}>
+          <Pressable
+            style={styles.subjectAdd}
+            onPress={() => {
+              setSubjectQuery('');
+              setSubjectSheet(true);
+            }}
+          >
             <Ionicons name="add" size={22} color={colors.white} />
           </Pressable>
         </View>
         <Text style={styles.subjectHint}>
-          Type a subject you teach for this class, then tap +. You can add more later from the grade book.
+          Tap + to pick a subject from the list, or type your own and press return. You can add more
+          later from the grade book.
         </Text>
 
         {existingSubjects.length + pendingSubjects.length > 0 ? (
@@ -223,6 +306,71 @@ export default function SectionForm() {
         ) : null}
         <View style={{ height: 20 }} />
       </ScrollView>
+
+      {/* Subject list opened by the + button */}
+      <Modal
+        visible={subjectSheet}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setSubjectSheet(false)}
+      >
+        <View style={styles.sheetBackdrop}>
+          <View style={styles.sheet}>
+            <View style={styles.sheetHandle} />
+            <Text style={styles.sheetTitle}>Choose a subject</Text>
+            <Text style={styles.sheetSub}>Tap to add — tap again to remove.</Text>
+            <View style={styles.sheetSearch}>
+              <Ionicons name="search" size={17} color={colors.textFaint} />
+              <TextInput
+                style={styles.sheetSearchInput}
+                placeholder="Search subjects"
+                placeholderTextColor={colors.textFaint}
+                value={subjectQuery}
+                onChangeText={setSubjectQuery}
+                autoCorrect={false}
+              />
+              {subjectQuery ? (
+                <Pressable onPress={() => setSubjectQuery('')} hitSlop={8}>
+                  <Ionicons name="close-circle" size={18} color={colors.textFaint} />
+                </Pressable>
+              ) : null}
+            </View>
+            <ScrollView style={styles.sheetList} keyboardShouldPersistTaps="handled">
+              {suggestions.length === 0 ? (
+                <Text style={styles.sheetEmpty}>
+                  No subject matches “{subjectQuery}”. Go back and type it in the field instead.
+                </Text>
+              ) : (
+                suggestions.map((name) => {
+                  const chosen = isChosen(name);
+                  return (
+                    <Pressable
+                      key={name}
+                      onPress={() => toggleSuggestion(name)}
+                      style={[styles.sheetRow, chosen && styles.sheetRowChosen]}
+                    >
+                      <Ionicons
+                        name={chosen ? 'checkmark-circle' : 'add-circle-outline'}
+                        size={20}
+                        color={chosen ? colors.green : colors.textFaint}
+                      />
+                      <Text style={[styles.sheetRowLabel, chosen && { color: colors.navyDark }]}>
+                        {name}
+                      </Text>
+                    </Pressable>
+                  );
+                })
+              )}
+            </ScrollView>
+            <AppButton
+              label={`Done${pendingSubjects.length ? ` (${pendingSubjects.length} added)` : ''}`}
+              icon="checkmark"
+              onPress={() => setSubjectSheet(false)}
+              style={{ marginTop: 12 }}
+            />
+          </View>
+        </View>
+      </Modal>
     </Screen>
   );
 }
@@ -273,6 +421,7 @@ const styles = StyleSheet.create({
   yearHint: { fontFamily: fonts.regular, fontSize: 11.5, color: colors.textSoft, marginTop: 1 },
   yearMenu: {
     marginTop: 8,
+    maxHeight: 282,
     backgroundColor: colors.white,
     borderRadius: radius.lg,
     borderWidth: 1.5,
@@ -280,6 +429,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     ...shadow.card,
   },
+  yearMenuContent: { paddingVertical: 2 },
   yearOption: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -338,4 +488,62 @@ const styles = StyleSheet.create({
   },
   subjectChipLabel: { fontFamily: fonts.semibold, fontSize: 12.5, color: colors.navy },
   error: { fontFamily: fonts.medium, fontSize: 13, color: colors.red, marginTop: 12, textAlign: 'center' },
+  sheetBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(8, 30, 74, 0.45)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: colors.white,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 18,
+    paddingTop: 10,
+    paddingBottom: 24,
+    maxHeight: '86%',
+  },
+  sheetHandle: {
+    width: 44,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: colors.border,
+    alignSelf: 'center',
+    marginBottom: 10,
+  },
+  sheetTitle: { fontFamily: fonts.bold, fontSize: 18, color: colors.navyDark },
+  sheetSub: { fontFamily: fonts.regular, fontSize: 12.5, color: colors.textSoft, marginTop: 2, marginBottom: 10 },
+  sheetSearch: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: colors.bg,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: 12,
+    minHeight: 46,
+    marginBottom: 8,
+  },
+  sheetSearchInput: { flex: 1, fontFamily: fonts.medium, fontSize: 14.5, color: colors.text, paddingVertical: 6 },
+  sheetList: { flexGrow: 0, maxHeight: 330 },
+  sheetEmpty: {
+    fontFamily: fonts.regular,
+    fontSize: 13,
+    color: colors.textSoft,
+    textAlign: 'center',
+    paddingVertical: 18,
+    lineHeight: 19,
+  },
+  sheetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    borderRadius: radius.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.bg,
+  },
+  sheetRowChosen: { backgroundColor: colors.ice },
+  sheetRowLabel: { flex: 1, fontFamily: fonts.medium, fontSize: 14, color: colors.text },
 });

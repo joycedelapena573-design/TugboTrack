@@ -3,7 +3,7 @@
  * teacher is new or returning, then routes to MPIN setup or MPIN login.
  */
 import { useEffect, useState } from 'react';
-import { Animated, Image, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Animated, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -18,6 +18,7 @@ import {
   Swoosh,
   TopCornerCurve,
 } from '../components/decor';
+import { SchoolLogo } from '../components/SchoolLogo';
 import { colors, fonts } from '../lib/theme';
 import { hasMpin } from '../lib/mpin';
 import { useStore } from '../lib/store';
@@ -91,17 +92,18 @@ export default function Splash() {
 
       <SafeAreaView style={styles.content} edges={['top', 'bottom']}>
         <View style={styles.center}>
-          <Image
-            source={require('../../assets/school-logo.png')}
-            style={{ width: width * 0.36, height: width * 0.36 }}
-            resizeMode="contain"
-          />
+          <SchoolLogo size={width * 0.36} />
 
           <View style={styles.wordmarkWrap}>
             <View style={[styles.cap, { left: width * 0.31 }]}>
               <CapIcon size={46} />
             </View>
-            <Text style={styles.wordmark}>
+            <Text
+              style={styles.wordmark}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.55}
+            >
               <Text style={{ color: colors.navyDark }}>Class</Text>
               <Text style={{ color: colors.blue }}>Track</Text>
             </Text>
@@ -109,7 +111,9 @@ export default function Splash() {
 
           <View style={styles.dividerRow}>
             <View style={styles.dash} />
-            <Text style={styles.schoolName}>Tugbo Integrated School</Text>
+            <Text style={styles.schoolName} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+              Tugbo Integrated School
+            </Text>
             <View style={styles.dash} />
           </View>
 
