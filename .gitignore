@@ -3,20 +3,11 @@
 # dependencies
 node_modules/
 
-# Expo
+# Expo (legacy tooling leftovers)
 .expo/
 dist/
 web-build/
 expo-env.d.ts
-
-# Native
-.kotlin/
-*.orig.*
-*.jks
-*.p8
-*.p12
-*.key
-*.mobileprovision
 
 # Metro
 .metro-health-check*
@@ -36,6 +27,27 @@ yarn-error.*
 # typescript
 *.tsbuildinfo
 
-# generated native folders
-/ios
-/android
+# native keys / provisioning (never commit)
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+.pub-cache/
+.pub/
+
+# Android
+.kotlin/
+.gradle/
+**/local.properties
+
+# iOS
+**/xcuserdata/

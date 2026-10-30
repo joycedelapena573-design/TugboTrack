@@ -1,0 +1,61 @@
+name: tugbotrack
+description: "TIS ClassTrack — offline class record app for teachers (Flutter)."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.7
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  # state
+  provider: ^6.1.5
+  # local SQLite database (offline class records)
+  sqflite: ^2.4.5
+  path: ^1.9.1
+  path_provider: ^2.1.6
+  # 6-digit MPIN: salted SHA-256 in the device keychain
+  crypto: ^3.0.8
+  flutter_secure_storage: ^11.2.0
+  # pick the school logo, import CSV, share exports
+  image_picker: ^1.2.4
+  file_picker: ^13.3.0
+  share_plus: ^13.3.1
+  # class record reports
+  pdf: ^3.13.1
+  printing: ^5.15.1
+  intl: ^0.20.3
+  flutter_svg: ^2.3.2
+  # same icon set the mockups use (Ionicons)
+  ionicons: ^0.2.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  # real SQLite on the test VM (no device needed)
+  sqflite_common_ffi: ^2.4.5
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/school-logo.png
+    - assets/icon.png
+  fonts:
+    - family: Poppins
+      fonts:
+        - asset: assets/fonts/Poppins-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Poppins-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Poppins-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Poppins-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/Poppins-ExtraBold.ttf
+          weight: 800
+    - family: Caveat
+      fonts:
+        - asset: assets/fonts/Caveat.ttf

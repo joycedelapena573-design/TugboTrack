@@ -3,9 +3,9 @@
 **Smarter Class Records, Made Simple.**
 
 A user-friendly, offline-first class record mobile app for teachers, built with
-Expo (React Native) so it runs on **both iOS and Android** from one codebase.
+**Flutter (Dart)** so it runs on **both iOS and Android** from one codebase.
 All student information, grades, attendance and BMI records are stored **locally
-on the device** — no internet connection required — and protected by a
+on the device** in SQLite — no internet connection required — and protected by a
 **6-digit MPIN**.
 
 ---
@@ -15,12 +15,12 @@ on the device** — no internet connection required — and protected by a
 ### 1. Student information management
 - Add, edit, view and delete students (manual typing or bulk import).
 - Records organized by **grade level, section, subject, school year and grading period**.
-- Fully local **SQLite database** (`src/lib/db.ts`) for offline access — one
+- Fully local **SQLite database** (`lib/data/database.dart`) for offline access — one
   table each for sections, students, subjects, score sheets, scores, attendance
   and BMI, written on every save and read back on launch.
 - **Import CSV** from the device's file manager (Name, LRN, Gender, Birthday,
-  Guardian, Contact, Seat columns — header aliases are auto-detected), or use
-  **Quick Type** for one-line manual entry.
+  Guardian, Contact, Seat columns — header aliases are auto-detected), or type
+  students one by one.
 - **"Add Student Information"** button reveals birthday (age auto-computed),
   Learners Reference Number (LRN), guardian/parent name and contact number.
 - **Learner profile**: tapping a student's name shows *everything* — personal
@@ -46,7 +46,7 @@ on the device** — no internet connection required — and protected by a
 - Search students by name or LRN inside each class; view/update class records.
 - Generate **class record reports** with scores, computed grades, class averages
   and remarks (formal A4 layout with signature lines).
-- **Print** directly or **save as PDF** (expo-print + share sheet).
+- **Print** directly or **save/share as PDF** (`printing` package).
 - **CSV export** for class records, rosters and full backups (opens in Excel/Sheets).
 - **Automatic CSV backup after every save/change** (attendance, scores,
   student edits…) into the app's `auto-backups/` folder — rolling set of
@@ -67,7 +67,7 @@ on the device** — no internet connection required — and protected by a
   background; wrong attempts are counted and lock out for 30 s after 5 failures.
 - **Change MPIN** any time in Settings → Security.
 - The MPIN is stored as a **salted SHA-256 hash in the device keychain**
-  (iOS Keychain / Android Keystore via expo-secure-store) — never in plain text.
+  (iOS Keychain / Android Keystore via `flutter_secure_storage`) — never in plain text.
 
 ---
 
@@ -75,48 +75,52 @@ on the device** — no internet connection required — and protected by a
 
 | Screen | File | Notes |
 | --- | --- | --- |
-| Splash / loading page | `src/app/index.tsx` | Recreated from mockup 1 — school seal, ClassTrack wordmark with grad cap, script tagline, loading pill + progress bar. Shown on **every** app open, then routes to MPIN setup or unlock. |
-| MPIN setup | `src/app/mpin-setup.tsx` | Recreated from mockup 2, adapted to **6 digits** (per requirement 6). |
-| MPIN unlock | `src/app/mpin-login.tsx` | Dot display + numeric keypad. |
-| Home / classes | `src/app/(main)/index.tsx` | Greeting, stats, class cards. |
-| Class detail | `src/app/class/[id].tsx` | Roster, subjects, import, quick actions. |
-| Attendance | `src/app/(main)/attendance.tsx` | Seat board with P/L/A/E. |
-| Grade book | `src/app/(main)/grades.tsx` | Items, score grid, computed grades. |
-| BMI | `src/app/bmi.tsx` | Record + history with privacy toggle. |
-| Reports | `src/app/reports.tsx` | Print / PDF / CSV / backups. |
-| Settings | `src/app/settings.tsx` | Name, change MPIN, storage info. |
+| Splash / loading page | `lib/screens/splash.dart` | Recreated from mockup 1 — school seal, ClassTrack wordmark with grad cap, script tagline, loading pill + progress bar. Shown on **every** app open, then routes to MPIN setup or unlock. |
+| MPIN setup | `lib/screens/mpin_setup.dart` | Recreated from mockup 2, adapted to **6 digits** (per requirement 6). |
+| MPIN unlock | `lib/screens/mpin_login.dart` | Dot display + numeric keypad. |
+| Main shell (tabs) | `lib/screens/main_shell.dart` | Home / Grades / More, re-locks when the app backgrounds. |
+| Home / classes | `lib/screens/home.dart` | Greeting, stats, class cards. |
+| Class detail | `lib/screens/class_detail.dart` | Roster, subjects, import, quick actions. |
+| Attendance | `lib/screens/attendance.dart` | Seat board with P/L/A/E. |
+| Grade book | `lib/screens/grades.dart` | Items, score grid, computed grades. |
+| BMI | `lib/screens/bmi.dart` | Record + history with privacy toggle. |
+| Reports | `lib/screens/reports.dart` | Print / PDF / CSV / backups. |
+| Settings | `lib/screens/settings.dart` | Name, change MPIN, storage info. |
 
 ## Project structure
 
 ```
-assets/                 # school seal + app icons (regenerate: node tools/generate-assets.mjs)
-src/app/                # Expo Router screens (file-based navigation)
-src/components/         # shared UI kit + brand SVG illustrations
-src/lib/                # store, SQLite database, grading engine, CSV/backup, MPIN, BMI
-tools/                  # asset generator (sharp + opentype.js)
+assets/                 # school seal, app icons and Poppins/Caveat fonts
+android/, ios/          # Flutter platform projects (flutter create)
+lib/main.dart           # providers, theme, splash entry point
+lib/models/             # data model types (sections, students, grades, …)
+lib/data/               # SQLite layer (sqflite) + legacy import
+lib/state/              # app store (ChangeNotifier) and MPIN lock state
+lib/services/           # grading engine, BMI, CSV, importer, backups, MPIN, PDF reports
+lib/screens/            # one file per screen
+lib/widgets/            # shared UI kit, seat board, pin pad, school logo, decorations
+test/                   # pure-Dart tests for grading, BMI and CSV
 ```
 
 ## Getting started
 
 ```bash
-npm install          # if node_modules is missing
-npx expo start       # then press i / a, or scan the QR with Expo Go
+flutter pub get
+flutter run             # on a connected device or emulator
 ```
 
-Native modules used (secure store, SQLite, file system, print, document
-picker) are part of Expo Go for development; for production builds use EAS:
+Build release binaries:
 
 ```bash
-bunx eas-cli@latest build --profile production   # iOS + Android in the cloud
-bunx eas-cli@latest submit                       # App Store / Play Store
+flutter build apk       # Android
+flutter build ipa       # iOS (requires Xcode)
 ```
 
 ## Verification performed
 
-- `npx tsc --noEmit` — passes
-- `npx expo lint` — passes (0 errors, 0 warnings)
-- `npx expo export --platform ios` — bundles cleanly (all routes + assets)
-- `npx expo-doctor` — 20/20 checks passed
+- `flutter analyze` — no issues found
+- `flutter test` — all tests pass (grade computation, weight redistribution,
+  DepEd transmutation, BMI interpretation, CSV round-trip)
 
 ## Notes
 
@@ -124,10 +128,9 @@ bunx eas-cli@latest submit                       # App Store / Play Store
   follows the mockup's design with 6-digit fields.
 - **School logo:** `assets/school-logo.png` is a faithful vector recreation of
   the Tugbo Integrated School seal (torch, open book, laurel, 1965 ribbon).
-  To use the official artwork instead, replace that file (1024×1024 PNG) and
-  run `node tools/generate-assets.mjs` to refresh the app icons.
+  Teachers can replace it from Settings → School Logo and pick their own image.
 - Data never leaves the device unless the teacher explicitly shares an export.
 - **Storage:** all records live in the on-device SQLite file `classtrack.db`.
   Data saved by an older build in AsyncStorage is imported into SQLite
-  automatically on first launch (one transaction, retried until it succeeds),
-  then removed so SQLite is the single source of truth.
+  automatically on first launch, then removed so SQLite is the single source
+  of truth.
