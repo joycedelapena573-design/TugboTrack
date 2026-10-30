@@ -15,7 +15,9 @@ on the device** — no internet connection required — and protected by a
 ### 1. Student information management
 - Add, edit, view and delete students (manual typing or bulk import).
 - Records organized by **grade level, section, subject, school year and grading period**.
-- Fully local storage (AsyncStorage) for offline access.
+- Fully local **SQLite database** (`src/lib/db.ts`) for offline access — one
+  table each for sections, students, subjects, score sheets, scores, attendance
+  and BMI, written on every save and read back on launch.
 - **Import CSV** from the device's file manager (Name, LRN, Gender, Birthday,
   Guardian, Contact, Seat columns — header aliases are auto-detected), or use
   **Quick Type** for one-line manual entry.
@@ -90,7 +92,7 @@ on the device** — no internet connection required — and protected by a
 assets/                 # school seal + app icons (regenerate: node tools/generate-assets.mjs)
 src/app/                # Expo Router screens (file-based navigation)
 src/components/         # shared UI kit + brand SVG illustrations
-src/lib/                # store, grading engine, CSV/backup, MPIN, BMI, formats
+src/lib/                # store, SQLite database, grading engine, CSV/backup, MPIN, BMI
 tools/                  # asset generator (sharp + opentype.js)
 ```
 
@@ -101,8 +103,8 @@ npm install          # if node_modules is missing
 npx expo start       # then press i / a, or scan the QR with Expo Go
 ```
 
-Native modules used (secure store, file system, print, document picker) are
-part of Expo Go for development; for production builds use EAS:
+Native modules used (secure store, SQLite, file system, print, document
+picker) are part of Expo Go for development; for production builds use EAS:
 
 ```bash
 bunx eas-cli@latest build --profile production   # iOS + Android in the cloud
@@ -125,3 +127,7 @@ bunx eas-cli@latest submit                       # App Store / Play Store
   To use the official artwork instead, replace that file (1024×1024 PNG) and
   run `node tools/generate-assets.mjs` to refresh the app icons.
 - Data never leaves the device unless the teacher explicitly shares an export.
+- **Storage:** all records live in the on-device SQLite file `classtrack.db`.
+  Data saved by an older build in AsyncStorage is imported into SQLite
+  automatically on first launch (one transaction, retried until it succeeds),
+  then removed so SQLite is the single source of truth.
