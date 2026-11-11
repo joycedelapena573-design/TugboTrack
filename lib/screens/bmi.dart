@@ -63,7 +63,11 @@ class _BmiScreenState extends State<BmiScreen> {
     final latestBmi = latest == null
         ? null
         : computeBmi(latest.heightCm, latest.weightKg);
-    final interpretation = interpretBmi(latestBmi);
+    final interpretation = interpretBmi(
+      latestBmi,
+      ageYears: student?.ageAt(),
+      sex: student?.gender,
+    );
 
     return Screen(
       child: Column(
@@ -382,6 +386,8 @@ class _BmiScreenState extends State<BmiScreen> {
                         _HistoryRow(
                           record: record,
                           revealed: _revealed,
+                          ageYears: student.ageAt(),
+                          sex: student.gender,
                           onDelete: () => state.deleteBmi(record.id),
                         ),
                   ],
@@ -407,7 +413,11 @@ class _BmiScreenState extends State<BmiScreen> {
           final h = double.tryParse(height.text.trim()) ?? 0;
           final w = double.tryParse(weight.text.trim()) ?? 0;
           final preview = h > 0 && w > 0 ? computeBmi(h, w) : null;
-          final previewInterp = interpretBmi(preview);
+          final previewInterp = interpretBmi(
+            preview,
+            ageYears: student.ageAt(),
+            sex: student.gender,
+          );
 
           return AlertDialog(
             backgroundColor: AppColors.white,
@@ -616,17 +626,21 @@ class _HistoryRow extends StatelessWidget {
   const _HistoryRow({
     required this.record,
     required this.revealed,
+    this.ageYears,
+    this.sex,
     required this.onDelete,
   });
 
   final BmiRecord record;
   final bool revealed;
+  final int? ageYears;
+  final String? sex;
   final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
     final bmi = computeBmi(record.heightCm, record.weightKg);
-    final interp = interpretBmi(bmi);
+    final interp = interpretBmi(bmi, ageYears: ageYears, sex: sex);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),

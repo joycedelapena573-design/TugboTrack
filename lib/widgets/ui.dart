@@ -7,6 +7,21 @@ import 'package:ionicons/ionicons.dart';
 
 import '../theme/app_theme.dart';
 
+/// Anchor rectangle for a share sheet: iPad needs a popover origin, phones
+/// ignore it. Falls back to the centre of the screen.
+Rect shareOriginOf(BuildContext context) {
+  final box = context.findRenderObject();
+  if (box is RenderBox && box.hasSize) {
+    return box.localToGlobal(Offset.zero) & box.size;
+  }
+  final size = MediaQuery.sizeOf(context);
+  return Rect.fromCenter(
+    center: Offset(size.width / 2, size.height / 2),
+    width: 1,
+    height: 1,
+  );
+}
+
 class Screen extends StatelessWidget {
   const Screen({super.key, required this.child, this.padding = const EdgeInsets.only(top: 0)});
 

@@ -1,18 +1,23 @@
-/// CSV backups. Every save/change in the app schedules an automatic local CSV
-/// backup (requirement 4.4); teachers can also export a shareable backup.
+/// Automatic CSV backups and export helpers.
+///
+/// The app keeps an automatic CSV snapshot of the class records on the device
+/// after every save, plus on-demand full exports. The SQLite database remains
+/// the source of truth; these files exist so a teacher can open their records
+/// in a spreadsheet or recover them by hand.
 library;
 
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' as math;
+import 'dart:ui' show Rect;
 
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../models/models.dart';
-import '../utils/format.dart';
-import 'csv.dart';
+import 'grading.dart';
 
+/// Everything a report or export needs, taken from [AppState.backupData].
 class BackupData {
   const BackupData({
     required this.teacherName,
@@ -23,6 +28,8 @@ class BackupData {
     required this.scores,
     required this.attendance,
     required this.bmi,
+    this.activeSchoolYear,
+    this.activeTerm = 1,
   });
 
   final String teacherName;
@@ -33,254 +40,354 @@ class BackupData {
   final ScoreMap scores;
   final Map<String, AttendanceDay> attendance;
   final Map<String, BmiRecord> bmi;
-}
+  final String? activeSchoolYear;
+  final int activeTerm;
 
-const String _autoDir = 'auto-backups';
+  Section? section(String id) => sections[id];
 
-List<Student> _sortedStudents(BackupData data) {
-  final list = data.students.values.toList()
-    ..sort((a, b) {
-      final bySection = a.sectionId.compareTo(b.sectionId);
-      if (bySection != 0) return bySection;
-      return a.seatNumber.compareTo(b.seatNumber);
-    });
-  return list;
-}
-
-List<Student> _studentsOfSection(BackupData data, String sectionId) {
-  final list = data.students.values.where((s) => s.sectionId == sectionId).toList()
-    ..sort((a, b) => a.seatNumber.compareTo(b.seatNumber));
-  return list;
-}
-
-String buildStudentsCsv(BackupData data) {
-  final rows = <List<Object?>>[
-    const [
-      'Seat', 'Name', 'LRN', 'Gender', 'Birthday', 'Age', 'Guardian',
-      'Contact', 'Grade Level', 'Section', 'School Year',
-    ],
-  ];
-  for (final s in _sortedStudents(data)) {
-    final sec = data.sections[s.sectionId];
-    rows.add([
-      s.seatNumber,
-      s.fullName,
-      s.lrn,
-      s.gender,
-      s.birthday,
-      ageFromBirthday(s.birthday) ?? '',
-      s.guardianName,
-      s.guardianContact,
-      sec?.gradeLevel ?? '',
-      sec?.section ?? '',
-      sec?.schoolYear ?? '',
-    ]);
+  List<Student> rosterOf(String sectionId, {bool includeArchived = false}) {
+    final list = students.values
+        .where((student) =>
+            student.sectionId == sectionId &&
+            (includeArchived || !student.archived))
+        .toList()
+      ..sort((a, b) => a.seatNumber.compareTo(b.seatNumber));
+    return list;
   }
-  return toCsv(rows);
+
+  List<Subject> subjectsOf(String sectionId) {
+    final list = subjects.values
+        .where((subject) => subject.sectionId == sectionId)
+        .toList()
+      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    return list;
+  }
+
+  ScoreSheet? sheetOf(String subjectId, int term) => sheets['$subjectId::t$term'];
+
+  TermGradeResult gradeOf(Subject subject, int term, String studentId) {
+    return computeTermGrade(
+      subject.weights,
+      subject.transmute,
+      sheetOf(subject.id, term),
+      scores,
+      studentId,
+    );
+  }
+
+  double? finalGradeOf(Subject subject, String studentId) {
+    final values = [
+      for (final term in subject.activeTerms)
+        gradeOf(subject, term, studentId).termGrade,
+    ];
+    return computeFinalGrade(values);
+  }
 }
 
-String buildGradesCsv(BackupData data) {
-  final rows = <List<Object?>>[
-    const [
-      'Grade Level', 'Section', 'School Year', 'Subject', 'Quarter',
-      'Student', 'Component', 'Item', 'Score', 'Highest',
-    ],
+/* ---------------------------------- CSV ----------------------------------- */
+
+/// Escapes a value for CSV output.
+String csvCell(Object? value) {
+  final text = value == null ? '' : '$value';
+  if (text.contains(',') || text.contains('"') || text.contains('\n')) {
+    return '"${text.replaceAll('"', '""')}"';
+  }
+  return text;
+}
+
+String _csvRow(List<Object?> cells) => cells.map(csvCell).join(',');
+
+/// Class record of one subject and term: one row per learner with the per
+/// category percentages, initial grade, term grade and descriptor.
+String buildClassRecordCsv(
+  BackupData data,
+  Section section,
+  Subject subject,
+  int term,
+) {
+  final buffer = StringBuffer();
+  final info = [
+    'Subject: ${subject.name}',
+    'Class: ${section.title}',
+    'School Year: ${section.schoolYear}',
+    'Term: $term',
+    'Teacher: ${subject.teacherName.isEmpty ? data.teacherName : subject.teacherName}',
   ];
-  for (final sheet in data.sheets.values) {
-    final subject = data.subjects[sheet.subjectId];
-    if (subject == null) continue;
-    final section = data.sections[subject.sectionId];
-    for (final component in ComponentKey.values) {
-      for (final item in sheet.items[component] ?? const <AssessmentItem>[]) {
-        for (final st in _studentsOfSection(data, subject.sectionId)) {
-          final score = data.scores[scoreKeyOf(sheet.id, st.id, item.id)];
-          if (score == null) continue;
-          rows.add([
-            section?.gradeLevel ?? '',
-            section?.section ?? '',
-            section?.schoolYear ?? '',
-            subject.name,
-            'Q${sheet.quarter}',
-            st.fullName,
-            component.label,
-            item.title,
-            score,
-            item.max,
-          ]);
-        }
+  for (final line in info) {
+    buffer.writeln(_csvRow([line]));
+  }
+  buffer.writeln();
+  buffer.writeln(_csvRow([
+    'Seat',
+    'Student',
+    'LRN',
+    'WW %',
+    'PT %',
+    'TE %',
+    'Initial Grade',
+    'Term Grade',
+    'Descriptor',
+  ]));
+  for (final student in data.rosterOf(section.id)) {
+    final result = data.gradeOf(subject, term, student.id);
+    String pct(AssessmentCategory category) {
+      final value = result.components[category]?.percentage;
+      return value == null ? '' : roundTo(value, 2).toString();
+    }
+
+    buffer.writeln(_csvRow([
+      student.seatNumber,
+      student.fullName,
+      student.lrn,
+      pct(AssessmentCategory.writtenWorks),
+      pct(AssessmentCategory.performanceTasks),
+      pct(AssessmentCategory.termExam),
+      result.initialGrade == null ? '' : roundTo(result.initialGrade!, 2),
+      result.termGrade == null ? '' : reportGrade(result.termGrade!),
+      gradeDescriptors(result.termGrade),
+    ]));
+  }
+  return buffer.toString();
+}
+
+/// Final grades of a class: every subject × learner.
+String buildFinalGradesCsv(BackupData data, Section section) {
+  final subjects = data.subjectsOf(section.id);
+  final buffer = StringBuffer()
+    ..writeln(_csvRow(['Final Grades — ${section.title} — SY ${section.schoolYear}']))
+    ..writeln();
+  buffer.writeln(_csvRow([
+    'Seat',
+    'Student',
+    'LRN',
+    for (final subject in subjects) subject.name,
+  ]));
+  for (final student in data.rosterOf(section.id)) {
+    buffer.writeln(_csvRow([
+      student.seatNumber,
+      student.fullName,
+      student.lrn,
+      for (final subject in subjects)
+        data.finalGradeOf(subject, student.id) == null
+            ? ''
+            : reportGrade(data.finalGradeOf(subject, student.id)!),
+    ]));
+  }
+  return buffer.toString();
+}
+
+/// Attendance summary per learner for a class.
+String buildAttendanceCsv(BackupData data, Section section) {
+  final days = data.attendance.values
+      .where((day) => day.sectionId == section.id)
+      .toList()
+    ..sort((a, b) => a.date.compareTo(b.date));
+  final buffer = StringBuffer()
+    ..writeln(_csvRow(['Attendance — ${section.title} — SY ${section.schoolYear}']))
+    ..writeln();
+  buffer.writeln(_csvRow([
+    'Seat',
+    'Student',
+    'Days Recorded',
+    'Present',
+    'Late',
+    'Absent',
+    'Excused',
+    'Attendance %',
+  ]));
+  for (final student in data.rosterOf(section.id)) {
+    var present = 0, late = 0, absent = 0, excused = 0, recorded = 0;
+    for (final day in days) {
+      final status = day.statuses[student.id];
+      if (status == null) continue;
+      recorded += 1;
+      switch (status) {
+        case AttendanceStatus.present:
+          present += 1;
+        case AttendanceStatus.late:
+          late += 1;
+        case AttendanceStatus.absent:
+          absent += 1;
+        case AttendanceStatus.excused:
+          excused += 1;
       }
     }
+    final rate = recorded == 0 ? 0.0 : (present + late) / recorded * 100;
+    buffer.writeln(_csvRow([
+      student.seatNumber,
+      student.fullName,
+      recorded,
+      present,
+      late,
+      absent,
+      excused,
+      roundTo(rate, 1),
+    ]));
   }
-  return toCsv(rows);
+  return buffer.toString();
 }
 
-String buildAttendanceCsv(BackupData data) {
-  final rows = <List<Object?>>[
-    const ['Date', 'Grade Level', 'Section', 'School Year', 'Seat', 'Student', 'Status'],
-  ];
-  final days = data.attendance.values.toList()
-    ..sort((a, b) => a.date.compareTo(b.date));
-  for (final day in days) {
-    final section = data.sections[day.sectionId];
-    for (final st in _studentsOfSection(data, day.sectionId)) {
-      final status = day.statuses[st.id];
-      rows.add([
-        day.date,
-        section?.gradeLevel ?? '',
-        section?.section ?? '',
-        section?.schoolYear ?? '',
-        st.seatNumber,
-        st.fullName,
-        status?.name ?? '',
-      ]);
-    }
-  }
-  return toCsv(rows);
-}
-
-String buildBmiCsv(BackupData data) {
-  final rows = <List<Object?>>[
-    const ['Date', 'Student', 'Height (cm)', 'Weight (kg)', 'BMI'],
-  ];
-  final records = data.bmi.values.toList()
-    ..sort((a, b) => a.date.compareTo(b.date));
-  for (final r in records) {
-    final st = data.students[r.studentId];
-    final bmi = r.heightCm > 0 ? r.weightKg / _squaredCm(r.heightCm) : null;
-    rows.add([
-      r.date,
-      st?.fullName ?? '',
-      r.heightCm,
-      r.weightKg,
-      bmi == null ? '' : bmi.toStringAsFixed(1),
-    ]);
-  }
-  return toCsv(rows);
-}
-
-/// Full machine-readable backup (one row per record type, importable in
-/// spreadsheets).
+/// Every record the app holds, flattened into one CSV for a manual restore.
 String buildFullBackupCsv(BackupData data) {
-  final rows = <List<Object?>>[
-    const ['record_type', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9'],
-  ];
-  rows.add([
-    'meta', 'TIS ClassTrack backup',
-    formatShortDate(todayIso()), data.teacherName,
-  ]);
-  for (final sec in data.sections.values) {
-    rows.add(['section', sec.id, sec.gradeLevel, sec.section, sec.schoolYear]);
+  final buffer = StringBuffer()
+    ..writeln('# TugboTrack full backup')
+    ..writeln(_csvRow(['record', 'key', 'field', 'value']));
+
+  void record(String type, String key, Map<String, Object?> fields) {
+    fields.forEach((field, value) {
+      buffer.writeln(_csvRow([type, key, field, value]));
+    });
   }
-  for (final st in data.students.values) {
-    rows.add([
-      'student', st.id, st.sectionId, st.seatNumber, st.fullName, st.lrn,
-      st.gender, st.birthday, st.guardianName, st.guardianContact,
-    ]);
+
+  if (data.teacherName.isNotEmpty) {
+    record('teacher', 'local', {'name': data.teacherName});
   }
-  for (final sub in data.subjects.values) {
-    final w = sub.weights;
-    rows.add([
-      'subject', sub.id, sub.sectionId, sub.name, sub.teacherName,
-      '${_w(w, ComponentKey.quizzes)}/${_w(w, ComponentKey.assignments)}/${_w(w, ComponentKey.activities)}/${_w(w, ComponentKey.performanceTasks)}/${_w(w, ComponentKey.examinations)}',
-      sub.transmute ? 'transmute' : 'raw',
-    ]);
+  for (final section in data.sections.values) {
+    record('class', section.id, {
+      'gradeLevel': section.gradeLevel,
+      'section': section.section,
+      'schoolYear': section.schoolYear,
+      'curriculum': section.curriculum.label,
+      'archived': section.archived,
+    });
+  }
+  for (final student in data.students.values) {
+    record('student', student.id, {
+      'class': student.sectionId,
+      'seat': student.seatNumber,
+      'name': student.fullName,
+      'lrn': student.lrn,
+      'gender': student.gender,
+      'birthday': student.birthday,
+      'guardian': student.guardianName,
+      'contact': student.guardianContact,
+    });
+  }
+  for (final subject in data.subjects.values) {
+    record('subject', subject.id, {
+      'class': subject.sectionId,
+      'name': subject.name,
+      'terms': '${subject.termStart}-${subject.termEnd}',
+      'weights': [
+        for (final category in AssessmentCategory.values)
+          '${category.short} ${subject.weights[category] ?? 0}',
+      ].join('/'),
+      'transmute': subject.transmute,
+    });
   }
   for (final sheet in data.sheets.values) {
-    for (final component in ComponentKey.values) {
-      for (final item in sheet.items[component] ?? const <AssessmentItem>[]) {
-        rows.add([
-          'item', sheet.id, sheet.subjectId, 'Q${sheet.quarter}',
-          component.name, item.id, item.title, item.max,
-        ]);
+    for (final category in AssessmentCategory.values) {
+      for (final item in sheet.itemsOf(category)) {
+        record('assessment', item.id, {
+          'subject': sheet.subjectId,
+          'term': sheet.term,
+          'category': category.short,
+          'title': item.title,
+          'max': item.max,
+        });
       }
     }
   }
-  data.scores.forEach((key, score) {
-    rows.add(['score', key, score]);
+  data.scores.forEach((key, value) {
+    record('score', key, {'value': value});
   });
   for (final day in data.attendance.values) {
     day.statuses.forEach((studentId, status) {
-      rows.add(['attendance', day.sectionId, day.date, studentId, status.name]);
+      record('attendance', '${day.sectionId}|${day.date}|$studentId', {
+        'status': status.name,
+      });
     });
   }
-  for (final r in data.bmi.values) {
-    rows.add(['bmi', r.studentId, r.date, r.heightCm, r.weightKg]);
+  for (final record0 in data.bmi.values) {
+    record('bmi', record0.id, {
+      'height': record0.heightCm,
+      'weight': record0.weightKg,
+      'recordedAt': record0.recordedAt,
+    });
   }
-  return toCsv(rows);
+  return buffer.toString();
 }
 
-double _w(Weights weights, ComponentKey key) => weights[key] ?? 0;
+/* --------------------------------- files ---------------------------------- */
 
-double _squaredCm(double heightCm) {
-  final m = heightCm / 100;
-  return m * m;
+/// Folder the automatic backups are written to.
+Future<String> autoBackupDirPath() async {
+  final docs = await getApplicationDocumentsDirectory();
+  final dir = Directory(p.join(docs.path, 'TugboTrack', 'backups'));
+  if (!await dir.exists()) await dir.create(recursive: true);
+  return dir.path;
 }
 
-/// Same key format the scoring engine uses.
-String scoreKeyOf(String sheetId, String studentId, String itemId) =>
-    '$sheetId|$studentId|$itemId';
-
-Future<Directory> _autoBackupDir() async {
-  final base = await getApplicationDocumentsDirectory();
-  final dir = Directory(p.join(base.path, _autoDir));
-  if (!dir.existsSync()) dir.createSync(recursive: true);
-  return dir;
-}
-
-/// Write the rolling on-device CSV backup set (called on every app save).
+/// Writes the CSV snapshots (one per class + subject + term).
 Future<void> writeAutoBackups(BackupData data) async {
-  final dir = await _autoBackupDir();
-  final files = <String, String>{
-    'students.csv': buildStudentsCsv(data),
-    'grades.csv': buildGradesCsv(data),
-    'attendance.csv': buildAttendanceCsv(data),
-    'bmi.csv': buildBmiCsv(data),
-    'full-backup.csv': buildFullBackupCsv(data),
-  };
-  for (final entry in files.entries) {
-    await File(p.join(dir.path, entry.key))
-        .writeAsString(entry.value, flush: true);
+  try {
+    final dir = await autoBackupDirPath();
+    final stamp = DateTime.now();
+    final file = File(
+      p.join(
+        dir,
+        'classtrack-${stamp.year}${_two(stamp.month)}${_two(stamp.day)}.csv',
+      ),
+    );
+    final buffer = StringBuffer()..writeln(buildFullBackupCsv(data));
+    for (final section in data.sections.values) {
+      buffer
+        ..writeln()
+        ..writeln('# Class record — ${section.title}')
+        ..writeln(buildAttendanceCsv(data, section))
+        ..writeln(buildFinalGradesCsv(data, section));
+      for (final subject in data.subjectsOf(section.id)) {
+        for (final term in subject.activeTerms) {
+          buffer.writeln(buildClassRecordCsv(data, section, subject, term));
+        }
+      }
+    }
+    await file.writeAsString(buffer.toString(), flush: true);
+  } catch (error) {
+    // ignore: avoid_print
+    print('[backup] automatic CSV backup failed: $error');
   }
 }
 
-Timer? _backupTimer;
-DateTime? _lastRunAt;
+String _two(int value) => value.toString().padLeft(2, '0');
 
-/// Debounced auto-backup so rapid edits (typing scores) batch into one write.
+Timer? _autoBackupTimer;
+
+/// Debounced automatic backup: a burst of score entries writes one file.
 void scheduleAutoBackup(BackupData data) {
-  _backupTimer?.cancel();
-  final sinceLast = _lastRunAt == null
-      ? 0
-      : DateTime.now().difference(_lastRunAt!).inMilliseconds;
-  final delay = math.max(400, 1200 - sinceLast);
-  _backupTimer = Timer(Duration(milliseconds: delay), () async {
-    _backupTimer = null;
-    try {
-      await writeAutoBackups(data);
-      _lastRunAt = DateTime.now();
-    } catch (err) {
-      // ignore: avoid_print
-      print('Auto-backup failed: $err');
-    }
+  _autoBackupTimer?.cancel();
+  _autoBackupTimer = Timer(const Duration(seconds: 3), () {
+    unawaited(writeAutoBackups(data));
   });
 }
 
-Future<String> autoBackupDirPath() async => (await _autoBackupDir()).path;
-
-/// Write a timestamped full backup and return its path for sharing/saving.
-Future<String> exportFullBackupCsv(BackupData data) async {
-  final stamp = DateTime.now()
-      .toIso8601String()
-      .substring(0, 16)
-      .replaceAll(RegExp(r'[-:T]'), '');
-  return exportCsvFile('classtrack-backup-$stamp', buildFullBackupCsv(data));
+/// Writes [contents] to the exports folder and returns the file path.
+Future<String> exportCsvFile(String fileName, String contents) async {
+  final docs = await getApplicationDocumentsDirectory();
+  final dir = Directory(p.join(docs.path, 'TugboTrack', 'exports'));
+  if (!await dir.exists()) await dir.create(recursive: true);
+  final file = File(p.join(dir.path, fileName));
+  await file.writeAsString(contents, flush: true);
+  return file.path;
 }
 
-/// Write an arbitrary CSV (e.g. a class record sheet) and return its path.
-Future<String> exportCsvFile(String name, String csv) async {
-  final safe = name.replaceAll(RegExp(r'[^a-zA-Z0-9-_]+'), '_');
-  final dir = await getTemporaryDirectory();
-  final file = File(p.join(dir.path, '$safe.csv'));
-  await file.writeAsString(csv, flush: true);
-  return file.path;
+/// Full CSV export, ready to share.
+Future<String> exportFullBackupCsv(BackupData data) async {
+  final stamp = DateTime.now();
+  final name =
+      'tugbotrack-backup-${stamp.year}${_two(stamp.month)}${_two(stamp.day)}-${_two(stamp.hour)}${_two(stamp.minute)}.csv';
+  return exportCsvFile(name, buildFullBackupCsv(data));
+}
+
+/// Opens the platform share sheet for a file on disk.
+Future<void> shareFile(String path, {String? title, Rect? origin}) async {
+  await SharePlus.instance.share(
+    ShareParams(
+      files: [XFile(path)],
+      title: title,
+      subject: title,
+      // iPad presents the share sheet as a popover anchored to a rectangle.
+      sharePositionOrigin: origin,
+    ),
+  );
 }

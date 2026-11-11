@@ -1,19 +1,20 @@
-/// Reports & exports (requirements 4.1–4.4): search and review records,
-/// generate class record reports, print/save as PDF, and export CSV backups.
+/// Reports: class records, term and final grade sheets, rosters, attendance
+/// summaries and CSV exports — all generated on the device.
 library;
 
-import 'package:flutter/material.dart' hide Badge;
+import 'dart:io';
+
+import 'package:flutter/material.dart';
 import 'package:ionicons/ionicons.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
 import '../services/backup.dart';
-import '../services/grading.dart';
-import '../services/reports.dart';
+import '../services/reports.dart' as reports;
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
-import '../utils/format.dart';
 import '../widgets/ui.dart';
+import 'section_form.dart';
 
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key, this.sectionId});
@@ -25,363 +26,463 @@ class ReportsScreen extends StatefulWidget {
 }
 
 class _ReportsScreenState extends State<ReportsScreen> {
-  String? _sectionId;
+  String _sectionId = '';
   String? _subjectId;
-  int _quarter = 1;
-  String _busy = '';
+  int _term = 1;
+  String? _busy;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_sectionId != null) return;
     final state = context.read<AppState>();
-    final sections = state.sections.values.toList()
-      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
-    _sectionId = widget.sectionId ??
-        state.activeSectionId ??
-        (sections.isEmpty ? null : sections.first.id);
-  }
-
-  Future<void> _withBusy(String label, Future<void> Function() action) async {
-    setState(() => _busy = label);
-    try {
-      await action();
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Something went wrong: $error')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _busy = '');
+    if (_sectionId.isEmpty) {
+      final classes = state.classesOf(state.activeSchoolYear);
+      _sectionId = widget.sectionId ??
+          state.activeSectionId ??
+          (classes.isEmpty ? '' : classes.first.id);
+    }
+    _term = state.activeTerm;
+    if (_subjectId == null) {
+      final subjects = state.subjectsOf(_sectionId);
+      _subjectId = subjects.isEmpty ? null : subjects.first.id;
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final sections = state.sections.values.toList()
-      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
-    final section =
-        state.sections[_sectionId] ?? (sections.isEmpty ? null : sections.first);
+    final classes = state.classesOf(state.activeSchoolYear);
 
-    final subjectList = state.subjects.values
-        .where((s) => section != null && s.sectionId == section.id)
-        .toList()
-      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
-    final subject = subjectList.where((s) => s.id == _subjectId).firstOrNull ??
-        (subjectList.isEmpty ? null : subjectList.first);
-
-    final roster = section == null
-        ? <Student>[]
-        : (state.students.values
-                .where((s) => s.sectionId == section.id)
-                .toList()
-              ..sort((a, b) => a.seatNumber.compareTo(b.seatNumber)));
-
-    _Summary? summary;
-    if (subject != null) {
-      final sheet = state.sheets[state.sheetIdOf(subject.id, _quarter)];
-      final finals = <double>[];
-      for (final student in roster) {
-        if (sheet == null) break;
-        final grade = computeQuarterGrade(
-          subject.weights,
-          subject.transmute,
-          sheet,
-          state.scores,
-          student.id,
-        ).finalGrade;
-        if (grade != null) finals.add(grade);
-      }
-      if (finals.isNotEmpty) {
-        summary = _Summary(
-          avg: finals.reduce((a, b) => a + b) / finals.length,
-          high: finals.reduce((a, b) => a > b ? a : b),
-          low: finals.reduce((a, b) => a < b ? a : b),
-          passed: finals.where((f) => f >= passingGrade).length,
-          total: roster.length,
-        );
-      }
+    if (classes.isEmpty) {
+      return Screen(
+        child: Column(
+          children: [
+            const PageHeader(title: 'Reports', subtitle: 'No class yet'),
+            EmptyState(
+              icon: Ionicons.documentTextOutline,
+              title: 'Nothing to report yet',
+              subtitle: 'Create a class and record scores to generate reports.',
+              actionLabel: 'Create a class',
+              onAction: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const SectionFormScreen()),
+              ),
+            ),
+          ],
+        ),
+      );
     }
+
+    final section = state.sections[_sectionId] ?? classes.first;
+    final subjects = state.subjectsOf(section.id);
+    final subject = subjects.where((value) => value.id == _subjectId).firstOrNull ??
+        (subjects.isEmpty ? null : subjects.first);
+    final inTerm = subjects.where((value) => value.covers(_term)).toList();
+    final roster = state.studentsOf(section.id);
+    final data = state.backupData();
 
     return Screen(
       child: Column(
         children: [
           PageHeader(
-            title: 'Reports & Exports',
-            subtitle: 'Class records, print, PDF and CSV backups',
+            title: 'Reports',
+            subtitle: '${section.title} · ${termLabel(_term)}',
             onBack: () => Navigator.of(context).maybePop(),
           ),
+          if (classes.length > 1)
+            _chipRow([
+              for (final value in classes)
+                AppChip(
+                  label: value.shortTitle,
+                  active: value.id == section.id,
+                  onTap: () {
+                    setState(() {
+                      _sectionId = value.id;
+                      _subjectId = null;
+                    });
+                    context.read<AppState>().setActiveSection(value.id);
+                  },
+                ),
+            ]),
           Expanded(
             child: ListView(
-              padding: const EdgeInsets.only(bottom: 30),
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 30),
               children: [
-                if (sections.length > 1)
+                Segmented<int>(
+                  options: [
+                    for (final term in terms)
+                      SegmentedOption(term, termShortLabel(term)),
+                  ],
+                  value: _term,
+                  onChange: (term) {
+                    setState(() => _term = term);
+                    context.read<AppState>().setActiveTerm(term);
+                  },
+                ),
+                const SizedBox(height: 14),
+                if (_busy != null)
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: AppCard(
                       child: Row(
                         children: [
-                          for (final sec in sections)
-                            Padding(
-                              padding: const EdgeInsets.only(right: 8),
-                              child: AppChip(
-                                label:
-                                    '${sec.gradeLevel.replaceFirst('Grade ', 'G')} — ${sec.section}',
-                                active: sec.id == section?.id,
-                                onTap: () => setState(() {
-                                  _sectionId = sec.id;
-                                  _subjectId = null;
-                                }),
-                              ),
+                          const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            _busy!,
+                            style: const TextStyle(
+                              fontFamily: 'Poppins',
+                              fontSize: 12.5,
+                              color: AppColors.text,
                             ),
+                          ),
                         ],
                       ),
                     ),
                   ),
-                if (section == null)
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(16, 16, 16, 0),
-                    child: AppCard(
-                      child: Text(
-                        'Create a class first to generate reports.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: AppColors.textSoft,
-                        ),
-                      ),
-                    ),
-                  )
-                else if (subjectList.isEmpty || subject == null)
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(16, 16, 16, 0),
-                    child: AppCard(
-                      child: Text(
-                        'Add a subject to generate a class record report.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: AppColors.textSoft,
-                        ),
-                      ),
-                    ),
-                  )
-                else ...[
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-                    child: SizedBox(
-                      height: 42,
-                      child: ListView(
-                        scrollDirection: Axis.horizontal,
-                        children: [
-                          for (final sub in subjectList)
-                            Padding(
-                              padding: const EdgeInsets.only(right: 8),
-                              child: AppChip(
-                                label: sub.name,
-                                active: sub.id == subject.id,
-                                onTap: () => setState(() => _subjectId = sub.id),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
-                    child: Segmented<int>(
-                      options: [
-                        for (final q in quarters) SegmentedOption(q, 'Q$q'),
-                      ],
-                      value: _quarter,
-                      onChange: (q) => setState(() => _quarter = q),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-                    child: AppCard(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              const Expanded(
-                                child: Text(
-                                  'Class Record Preview',
-                                  style: TextStyle(
-                                    fontSize: 15.5,
-                                    fontWeight: AppFonts.bold,
-                                    color: AppColors.navyDark,
-                                  ),
-                                ),
-                              ),
-                              if (subject.transmute)
-                                const Badge(
-                                  label: 'Transmuted',
-                                  color: AppColors.amber,
-                                  bg: Color(0xFFFFF1D6),
-                                ),
-                            ],
-                          ),
-                          const SizedBox(height: 3),
-                          Text(
-                            '${section.gradeLevel} — ${section.section} · '
-                            '${subject.name} · Q$_quarter · SY ${section.schoolYear}',
-                            style: const TextStyle(
-                              fontSize: 12.5,
-                              color: AppColors.textSoft,
-                            ),
-                          ),
-                          Text(
-                            '${roster.length} students · teacher '
-                            '${subject.teacherName.isEmpty
-                                ? state.teacherName
-                                : subject.teacherName}',
-                            style: const TextStyle(
-                              fontSize: 12.5,
-                              color: AppColors.textSoft,
-                            ),
-                          ),
-                          if (summary == null)
-                            const Padding(
-                              padding: EdgeInsets.only(top: 12),
-                              child: Text(
-                                'No computed grades yet for this selection.',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: AppColors.textSoft,
-                                ),
-                              ),
-                            )
-                          else
-                            Padding(
-                              padding: const EdgeInsets.only(top: 14),
-                              child: Row(
+
+                _ReportCard(
+                  icon: Ionicons.readerOutline,
+                  title: 'Class Record',
+                  subtitle: subject == null
+                      ? 'Add a subject to print its class record.'
+                      : '${subject.name} · ${termLabel(_term)} — WW/PT/TE '
+                          'percentages, initial grade and term grade.',
+                  child: subject == null
+                      ? null
+                      : Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (subjects.length > 1) ...[
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
                                 children: [
-                                  _Stat(
-                                      label: 'Average',
-                                      value: summary.avg.toStringAsFixed(1)),
-                                  const SizedBox(width: 8),
-                                  _Stat(
-                                      label: 'Highest',
-                                      value: summary.high.toStringAsFixed(1)),
-                                  const SizedBox(width: 8),
-                                  _Stat(
-                                      label: 'Lowest',
-                                      value: summary.low.toStringAsFixed(1)),
-                                  const SizedBox(width: 8),
-                                  _Stat(
-                                      label: 'Passed',
-                                      value:
-                                          '${summary.passed}/${summary.total}'),
+                                  for (final value in subjects)
+                                    AppChip(
+                                      label: value.name,
+                                      active: value.id == subject.id,
+                                      onTap: () =>
+                                          setState(() => _subjectId = value.id),
+                                    ),
                                 ],
                               ),
+                              const SizedBox(height: 12),
+                            ],
+                            _ActionRow(
+                              busy: _busy != null,
+                              actions: [
+                                _Action(
+                                  label: 'Print PDF',
+                                  icon: Ionicons.printOutline,
+                                  onTap: () => _run(
+                                    'Preparing the class record…',
+                                    () async {
+                                      final bytes =
+                                          await reports.buildClassRecordPdfBytes(
+                                        data,
+                                        section,
+                                        subject,
+                                        _term,
+                                      );
+                                      await reports.printPdfBytes(
+                                        bytes,
+                                        name: 'class-record-${subject.name}-t$_term',
+                                      );
+                                    },
+                                  ),
+                                ),
+                                _Action(
+                                  label: 'Share PDF',
+                                  icon: Ionicons.shareSocialOutline,
+                                  onTap: () => _run(
+                                    'Preparing the class record…',
+                                    () async {
+                                      final bytes =
+                                          await reports.buildClassRecordPdfBytes(
+                                        data,
+                                        section,
+                                        subject,
+                                        _term,
+                                      );
+                                      await reports.sharePdfBytes(
+                                        bytes,
+                                        name: 'class-record-${subject.name}-t$_term.pdf',
+                                      );
+                                    },
+                                  ),
+                                ),
+                                _Action(
+                                  label: 'CSV',
+                                  icon: Ionicons.gridOutline,
+                                  onTap: () => _run('Exporting CSV…', () async {
+                                    final origin =
+                                        shareOriginOf(context);
+                                    final csv = buildClassRecordCsv(
+                                      data,
+                                      section,
+                                      subject,
+                                      _term,
+                                    );
+                                    final path = await exportCsvFile(
+                                      'class-record-${_slug(subject.name)}-t$_term.csv',
+                                      csv,
+                                    );
+                                    await shareFile(
+                                      path,
+                                      title: 'Class record CSV',
+                                      origin: origin,
+                                    );
+                                  }),
+                                ),
+                              ],
                             ),
-                        ],
+                          ],
+                        ),
+                ),
+
+                _ReportCard(
+                  icon: Ionicons.statsChartOutline,
+                  title: 'Term Grades',
+                  subtitle: inTerm.isEmpty
+                      ? 'No subject is offered in ${termLabel(_term)}.'
+                      : 'Every subject offered in ${termLabel(_term)} with each '
+                          'learner’s term grade.',
+                  child: inTerm.isEmpty
+                      ? null
+                      : _ActionRow(
+                          busy: _busy != null,
+                          actions: [
+                            _Action(
+                              label: 'Print PDF',
+                              icon: Ionicons.printOutline,
+                              onTap: () => _run('Preparing term grades…', () async {
+                                final bytes =
+                                    await reports.buildTermGradesPdfBytes(
+                                  data,
+                                  section,
+                                  _term,
+                                );
+                                await reports.printPdfBytes(
+                                  bytes,
+                                  name: 'term-grades-t$_term',
+                                );
+                              }),
+                            ),
+                            _Action(
+                              label: 'Share PDF',
+                              icon: Ionicons.shareSocialOutline,
+                              onTap: () => _run('Preparing term grades…', () async {
+                                final bytes =
+                                    await reports.buildTermGradesPdfBytes(
+                                  data,
+                                  section,
+                                  _term,
+                                );
+                                await reports.sharePdfBytes(
+                                  bytes,
+                                  name: 'term-grades-${_slug(section.title)}-t$_term.pdf',
+                                );
+                              }),
+                            ),
+                          ],
+                        ),
+                ),
+
+                _ReportCard(
+                  icon: Ionicons.trophyOutline,
+                  title: 'Final Grades',
+                  subtitle: 'Average of the term grades of every subject, with '
+                      'the general average.',
+                  child: _ActionRow(
+                    busy: _busy != null,
+                    actions: [
+                      _Action(
+                        label: 'Print PDF',
+                        icon: Ionicons.printOutline,
+                        onTap: () => _run('Preparing final grades…', () async {
+                          final bytes =
+                              await reports.buildFinalGradesPdfBytes(data, section);
+                          await reports.printPdfBytes(
+                            bytes,
+                            name: 'final-grades-${_slug(section.title)}',
+                          );
+                        }),
                       ),
-                    ),
-                  ),
-                  const _SectionTitle('Class Record Actions'),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
-                      children: [
-                        _ActionTile(
-                          icon: Ionicons.print,
-                          label: 'Print',
-                          hint: 'Direct printer',
-                          loading: _busy == 'print',
-                          onTap: () => _withBusy('print', () async {
-                            await printClassRecord(
-                              state.backupData(),
-                              section,
-                              subject,
-                              _quarter,
-                            );
-                          }),
-                        ),
-                        _ActionTile(
-                          icon: Ionicons.document,
-                          label: 'Save PDF',
-                          hint: 'Share or store',
-                          loading: _busy == 'pdf',
-                          onTap: () => _withBusy('pdf', () async {
-                            await shareClassRecordPdf(
-                              state.backupData(),
-                              section,
-                              subject,
-                              _quarter,
-                            );
-                          }),
-                        ),
-                        _ActionTile(
-                          icon: Ionicons.grid,
-                          label: 'Roster PDF',
-                          hint: 'Names + LRN',
-                          loading: _busy == 'roster',
-                          onTap: () => _withBusy('roster', () async {
-                            await shareRosterPdf(
-                              state.backupData(),
-                              section.id,
-                              section,
-                            );
-                          }),
-                        ),
-                        _ActionTile(
-                          icon: Ionicons.grid,
-                          label: 'Class CSV',
-                          hint: 'Grades for Excel',
-                          loading: _busy == 'csv',
-                          onTap: () => _withBusy('csv', () async {
-                            final csv = buildClassRecordCsv(
-                              state.backupData(),
-                              section,
-                              subject,
-                              _quarter,
-                            );
-                            final path = await exportCsvFile(
-                              'class-record-${subject.name}-Q$_quarter',
-                              csv,
-                            );
-                            await shareFile(path,
-                                title: 'Export class record CSV');
-                          }),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-                const _SectionTitle('Data Backup'),
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16),
-                  child: AppCard(
-                    child: _BackupCard(),
+                      _Action(
+                        label: 'Share PDF',
+                        icon: Ionicons.shareSocialOutline,
+                        onTap: () => _run('Preparing final grades…', () async {
+                          final bytes =
+                              await reports.buildFinalGradesPdfBytes(data, section);
+                          await reports.sharePdfBytes(
+                            bytes,
+                            name: 'final-grades-${_slug(section.title)}.pdf',
+                          );
+                        }),
+                      ),
+                      _Action(
+                        label: 'CSV',
+                        icon: Ionicons.gridOutline,
+                        onTap: () => _run('Exporting CSV…', () async {
+                          final origin = shareOriginOf(context);
+                          final path = await exportCsvFile(
+                            'final-grades-${_slug(section.title)}.csv',
+                            buildFinalGradesCsv(data, section),
+                          );
+                          await shareFile(
+                                      path,
+                                      title: 'Final grades CSV',
+                                      origin: origin,
+                                    );
+                        }),
+                      ),
+                    ],
                   ),
                 ),
-                const _SectionTitle('Search Records'),
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16),
-                  child: AppCard(
-                    child: Text(
-                      'Use the search box inside each class (Students tab) to '
-                      'find a learner by name or LRN, or tap any student to '
-                      'open their full profile.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: AppColors.textSoft,
-                        height: 1.45,
+
+                _ReportCard(
+                  icon: Ionicons.peopleOutline,
+                  title: 'Learner Roster',
+                  subtitle: '${roster.length} learners with LRN, birthday and '
+                      'guardian contact.',
+                  child: _ActionRow(
+                    busy: _busy != null,
+                    actions: [
+                      _Action(
+                        label: 'Print PDF',
+                        icon: Ionicons.printOutline,
+                        onTap: () => _run('Preparing the roster…', () async {
+                          final bytes =
+                              await reports.buildRosterPdfBytes(data, section);
+                          await reports.printPdfBytes(
+                            bytes,
+                            name: 'roster-${_slug(section.title)}',
+                          );
+                        }),
                       ),
-                    ),
+                      _Action(
+                        label: 'Share PDF',
+                        icon: Ionicons.shareSocialOutline,
+                        onTap: () => _run('Preparing the roster…', () async {
+                          final bytes =
+                              await reports.buildRosterPdfBytes(data, section);
+                          await reports.sharePdfBytes(
+                            bytes,
+                            name: 'roster-${_slug(section.title)}.pdf',
+                          );
+                        }),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 24),
+
+                _ReportCard(
+                  icon: Ionicons.calendarOutline,
+                  title: 'Attendance',
+                  subtitle: 'Days recorded, present/late/absent/excused totals '
+                      'and attendance rate.',
+                  child: _ActionRow(
+                    busy: _busy != null,
+                    actions: [
+                      _Action(
+                        label: 'Print PDF',
+                        icon: Ionicons.printOutline,
+                        onTap: () => _run('Preparing attendance…', () async {
+                          final bytes =
+                              await reports.buildAttendancePdfBytes(data, section);
+                          await reports.printPdfBytes(
+                            bytes,
+                            name: 'attendance-${_slug(section.title)}',
+                          );
+                        }),
+                      ),
+                      _Action(
+                        label: 'Share PDF',
+                        icon: Ionicons.shareSocialOutline,
+                        onTap: () => _run('Preparing attendance…', () async {
+                          final bytes =
+                              await reports.buildAttendancePdfBytes(data, section);
+                          await reports.sharePdfBytes(
+                            bytes,
+                            name: 'attendance-${_slug(section.title)}.pdf',
+                          );
+                        }),
+                      ),
+                      _Action(
+                        label: 'CSV',
+                        icon: Ionicons.gridOutline,
+                        onTap: () => _run('Exporting CSV…', () async {
+                          final origin = shareOriginOf(context);
+                          final path = await exportCsvFile(
+                            'attendance-${_slug(section.title)}.csv',
+                            buildAttendanceCsv(data, section),
+                          );
+                          await shareFile(
+                                      path,
+                                      title: 'Attendance CSV',
+                                      origin: origin,
+                                    );
+                        }),
+                      ),
+                    ],
+                  ),
+                ),
+
+                _ReportCard(
+                  icon: Ionicons.cloudDownloadOutline,
+                  title: 'Full CSV Backup',
+                  subtitle: 'Every class, learner, assessment, score, attendance '
+                      'mark and BMI record in one spreadsheet-ready file.',
+                  child: _ActionRow(
+                    busy: _busy != null,
+                    actions: [
+                      _Action(
+                        label: 'Share backup',
+                        icon: Ionicons.shareSocialOutline,
+                        onTap: () => _run('Building the backup…', () async {
+                          final origin = shareOriginOf(context);
+                          final path = await exportFullBackupCsv(data);
+                          await shareFile(
+                            path,
+                            title: 'TugboTrack backup',
+                            origin: origin,
+                          );
+                        }),
+                      ),
+                      _Action(
+                        label: 'Write now',
+                        icon: Ionicons.saveOutline,
+                        onTap: () => _run('Writing the automatic backup…', () async {
+                          await writeAutoBackups(data);
+                        }),
+                      ),
+                    ],
+                  ),
+                ),
+
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: FutureBuilder<String>(
+                    future: autoBackupDirPath(),
+                    builder: (context, snapshot) {
+                      final dir = snapshot.data;
+                      if (dir == null) return const SizedBox.shrink();
+                      return Text(
+                        'Automatic CSV backups are saved on this device in\n$dir',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 10.5,
+                          color: AppColors.textFaint,
+                          height: 1.4,
+                        ),
+                      );
+                    },
+                  ),
+                ),
               ],
             ),
           ),
@@ -389,55 +490,99 @@ class _ReportsScreenState extends State<ReportsScreen> {
       ),
     );
   }
+
+  Widget _chipRow(List<Widget> children) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: children),
+          ),
+        ),
+      );
+
+  String _slug(String value) => value
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+      .replaceAll(RegExp(r'^-|-$'), '');
+
+  Future<void> _run(String label, Future<void> Function() task) async {
+    if (_busy != null) return;
+    setState(() => _busy = label);
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      await task();
+    } catch (error) {
+      messenger?.showSnackBar(
+        SnackBar(content: Text('Could not generate the report: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = null);
+    }
+  }
 }
 
-class _Summary {
-  const _Summary({
-    required this.avg,
-    required this.high,
-    required this.low,
-    required this.passed,
-    required this.total,
+class _ReportCard extends StatelessWidget {
+  const _ReportCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    this.child,
   });
 
-  final double avg;
-  final double high;
-  final double low;
-  final int passed;
-  final int total;
-}
-
-class _Stat extends StatelessWidget {
-  const _Stat({required this.label, required this.value});
-  final String label;
-  final String value;
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Widget? child;
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        decoration: BoxDecoration(
-          color: AppColors.bg,
-          borderRadius: BorderRadius.circular(AppRadius.md),
-        ),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: AppCard(
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              value,
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: AppFonts.extrabold,
-                color: AppColors.navyDark,
-              ),
+            Row(
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  alignment: Alignment.center,
+                  decoration: const BoxDecoration(
+                    color: AppColors.ice,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(icon, size: 19, color: AppColors.navy),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: const TextStyle(
+                      fontFamily: 'Poppins',
+                      fontSize: 15,
+                      fontWeight: AppFonts.bold,
+                      color: AppColors.navyDark,
+                    ),
+                  ),
+                ),
+              ],
             ),
+            const SizedBox(height: 8),
             Text(
-              label,
+              subtitle,
               style: const TextStyle(
-                fontSize: 10.5,
+                fontSize: 12,
                 color: AppColors.textSoft,
+                height: 1.4,
               ),
             ),
+            if (child != null) ...[
+              const SizedBox(height: 12),
+              child!,
+            ],
           ],
         ),
       ),
@@ -445,71 +590,69 @@ class _Stat extends StatelessWidget {
   }
 }
 
-class _ActionTile extends StatelessWidget {
-  const _ActionTile({
-    required this.icon,
-    required this.label,
-    required this.hint,
-    required this.onTap,
-    this.loading = false,
-  });
+class _Action {
+  const _Action({required this.label, required this.icon, required this.onTap});
 
-  final IconData icon;
   final String label;
-  final String hint;
+  final IconData icon;
   final VoidCallback onTap;
-  final bool loading;
+}
+
+class _ActionRow extends StatelessWidget {
+  const _ActionRow({required this.actions, required this.busy});
+
+  final List<_Action> actions;
+  final bool busy;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: (MediaQuery.of(context).size.width - 42) / 2,
-      child: InkWell(
-        onTap: loading ? null : onTap,
-        borderRadius: BorderRadius.circular(AppRadius.md),
-        child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: AppColors.white,
-            border: Border.all(color: AppColors.border, width: 1.5),
-            borderRadius: BorderRadius.circular(AppRadius.md),
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final action in actions)
+          _ActionChip(
+            label: action.label,
+            icon: action.icon,
+            onTap: busy ? null : action.onTap,
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+      ],
+    );
+  }
+}
+
+class _ActionChip extends StatelessWidget {
+  const _ActionChip({required this.label, required this.icon, this.onTap});
+
+  final String label;
+  final IconData icon;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          decoration: BoxDecoration(
+            color: AppColors.ice,
+            borderRadius: BorderRadius.circular(AppRadius.pill),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                width: 40,
-                height: 40,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: AppColors.ice,
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: loading
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: AppColors.navy,
-                        ),
-                      )
-                    : Icon(icon, size: 20, color: AppColors.navy),
-              ),
-              const SizedBox(height: 8),
+              Icon(icon, size: 15, color: AppColors.navy),
+              const SizedBox(width: 6),
               Text(
                 label,
                 style: const TextStyle(
-                  fontSize: 14,
+                  fontFamily: 'Poppins',
+                  fontSize: 12.5,
                   fontWeight: AppFonts.semibold,
-                  color: AppColors.navyDark,
-                ),
-              ),
-              Text(
-                hint,
-                style: const TextStyle(
-                  fontSize: 11,
-                  color: AppColors.textSoft,
+                  color: AppColors.navy,
                 ),
               ),
             ],
@@ -520,162 +663,8 @@ class _ActionTile extends StatelessWidget {
   }
 }
 
-class _SectionTitle extends StatelessWidget {
-  const _SectionTitle(this.text);
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 20, 4, 10),
-      child: Text(
-        text,
-        style: const TextStyle(
-          fontSize: 16,
-          fontWeight: AppFonts.bold,
-          color: AppColors.navyDark,
-        ),
-      ),
-    );
-  }
-}
-
-class _BackupCard extends StatefulWidget {
-  const _BackupCard();
-
-  @override
-  State<_BackupCard> createState() => _BackupCardState();
-}
-
-class _BackupCardState extends State<_BackupCard> {
-  String? _path;
-  String _busy = '';
-
-  @override
-  void initState() {
-    super.initState();
-    autoBackupDirPath().then(
-          (value) => mounted ? setState(() => _path = value) : null,
-        );
-  }
-
-  Future<void> _run(String label, Future<void> Function() action) async {
-    setState(() => _busy = label);
-    try {
-      await action();
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Something went wrong: $error')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _busy = '');
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final state = context.read<AppState>();
-    final today = todayIso();
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Container(
-              width: 42,
-              height: 42,
-              alignment: Alignment.center,
-              decoration: const BoxDecoration(
-                color: Color(0xFFDFF5E7),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Ionicons.cloudDone,
-                  size: 20, color: AppColors.green),
-            ),
-            const SizedBox(width: 12),
-            const Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Automatic CSV backup',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: AppFonts.semibold,
-                      color: AppColors.navyDark,
-                    ),
-                  ),
-                  Text(
-                    'Runs after every save (attendance, scores, edits).',
-                    style: TextStyle(
-                      fontSize: 11.5,
-                      color: AppColors.textSoft,
-                      height: 1.4,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 4),
-        Text(
-          'Latest: ${formatShortDate(today)}',
-          style: const TextStyle(fontSize: 11.5, color: AppColors.textSoft),
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: _ActionTile(
-                icon: Ionicons.refresh,
-                label: 'Back up now',
-                hint: 'Rewrite CSV files',
-                loading: _busy == 'auto',
-                onTap: () => _run('auto', () async {
-                  final messenger = ScaffoldMessenger.of(context);
-                  await writeAutoBackups(state.backupData());
-                  messenger.showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'Latest CSV backups saved in: $_path',
-                      ),
-                    ),
-                  );
-                }),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _ActionTile(
-                icon: Ionicons.cloudUpload,
-                label: 'Full backup',
-                hint: 'Share one CSV',
-                loading: _busy == 'backup',
-                onTap: () => _run('backup', () async {
-                  final path =
-                      await exportFullBackupCsv(state.backupData());
-                  await shareFile(path, title: 'Full CSV backup');
-                }),
-              ),
-            ),
-          ],
-        ),
-        if (_path != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 12),
-            child: Text(
-              'Backup folder: $_path',
-              style: const TextStyle(
-                fontSize: 10.5,
-                color: AppColors.textFaint,
-              ),
-            ),
-          ),
-      ],
-    );
-  }
+/// Kept so the settings screen can report the database file location.
+Future<String> databaseFileLabel(AppState state) async {
+  final path = await state.databasePath();
+  return File(path).existsSync() ? path : path;
 }

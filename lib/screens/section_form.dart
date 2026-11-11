@@ -76,6 +76,7 @@ class _SectionFormScreenState extends State<SectionFormScreen> {
   late String _gradeLevel;
   late final TextEditingController _section;
   late String _schoolYear;
+  Curriculum _curriculum = Curriculum.existingShs;
   bool _yearOpen = false;
   final _subjectDraft = TextEditingController();
   bool _subjectSheet = false;
@@ -92,6 +93,7 @@ class _SectionFormScreenState extends State<SectionFormScreen> {
     _gradeLevel = existing?.gradeLevel ?? 'Grade 12';
     _section = TextEditingController(text: existing?.section ?? '');
     _schoolYear = existing?.schoolYear ?? currentSchoolYear();
+    _curriculum = existing?.curriculum ?? Curriculum.existingShs;
   }
 
   @override
@@ -175,6 +177,7 @@ class _SectionFormScreenState extends State<SectionFormScreen> {
         gradeLevel: _gradeLevel,
         section: name,
         schoolYear: _schoolYear,
+        curriculum: _curriculum,
       );
     } else {
       id = state
@@ -182,14 +185,19 @@ class _SectionFormScreenState extends State<SectionFormScreen> {
             gradeLevel: _gradeLevel,
             section: name,
             schoolYear: _schoolYear,
+            curriculum: _curriculum,
           )
           .id;
     }
+    final config = defaultConfigFor(_curriculum);
     for (final subject in _pendingSubjects) {
       state.addSubject(
         sectionId: id,
         name: subject,
         teacherName: state.teacherName,
+        weights: Map<AssessmentCategory, double>.from(config.weights),
+        transmute: config.transmute,
+        configId: config.id,
       );
     }
     Navigator.of(context).pop();
@@ -282,6 +290,21 @@ class _SectionFormScreenState extends State<SectionFormScreen> {
                         ),
                         if (grade != _gradeChoices.last) const SizedBox(width: 10),
                       ],
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  const _Label('Curriculum'),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final curriculum in Curriculum.values)
+                        AppChip(
+                          label: curriculum.label,
+                          active: _curriculum == curriculum,
+                          onTap: () =>
+                              setState(() => _curriculum = curriculum),
+                        ),
                     ],
                   ),
                   const SizedBox(height: 16),

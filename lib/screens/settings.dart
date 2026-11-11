@@ -4,6 +4,7 @@ library;
 
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:ionicons/ionicons.dart';
@@ -11,6 +12,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 
+import '../models/models.dart';
 import '../services/backup.dart';
 import '../services/mpin.dart';
 import '../state/app_state.dart';
@@ -161,6 +163,85 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     } catch (_) {
       setState(() => _message = 'Could not change the MPIN. Please try again.');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  String _two(int value) => value.toString().padLeft(2, '0');
+
+  /// Copies the SQLite database to the backups folder and shares it.
+  Future<void> _backupDatabase() async {
+    final state = context.read<AppState>();
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final origin = shareOriginOf(context);
+    setState(() => _saving = true);
+    try {
+      final dir = await autoBackupDirPath();
+      final now = DateTime.now();
+      final name = 'tugbotrack-${now.year}${_two(now.month)}${_two(now.day)}'
+          '-${_two(now.hour)}${_two(now.minute)}.db';
+      final file = await state.backupDatabase(p.join(dir, name));
+      await shareFile(
+        file.path,
+        title: 'TugboTrack database backup',
+        origin: origin,
+      );
+    } catch (error) {
+      messenger?.showSnackBar(
+        SnackBar(content: Text('Could not write the backup: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// Replaces the database with a backup file after an explicit confirmation.
+  Future<void> _restoreDatabase() async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final picked = await FilePicker.pickFile(
+      type: FileType.custom,
+      allowedExtensions: const ['db', 'sqlite', 'sqlite3'],
+    );
+    if (picked == null) return;
+    final path = picked.path;
+    if (path == null) return;
+    if (!mounted) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Restore this backup?'),
+        content: Text(
+          'Every class, learner, score, grade and attendance record currently on '
+          'this device will be replaced by the contents of “${picked.name}”.',
+        ),
+        actions: [
+          AppButton(
+            label: 'Cancel',
+            variant: ButtonVariant.ghost,
+            onTap: () => Navigator.of(dialogContext).pop(false),
+          ),
+          AppButton(
+            label: 'Restore',
+            variant: ButtonVariant.danger,
+            onTap: () => Navigator.of(dialogContext).pop(true),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _saving = true);
+    try {
+      await context.read<AppState>().restoreDatabase(path);
+      messenger?.showSnackBar(
+        const SnackBar(content: Text('Backup restored.')),
+      );
+    } catch (error) {
+      messenger?.showSnackBar(
+        SnackBar(content: Text('Could not restore the backup: $error')),
+      );
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -356,17 +437,88 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ],
                     ),
                   ),
+                  const _SectionTitle('School Year & Terms'),
+                  AppCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            for (final year in state.schoolYearNames)
+                              AppChip(
+                                label: year,
+                                active: (state.activeSchoolYear ??
+                                        currentSchoolYear()) ==
+                                    year,
+                                onTap: () =>
+                                    context.read<AppState>().setActiveSchoolYear(year),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        for (final term
+                            in state.termsOf(state.activeSchoolYear))
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 6),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    'Term ${term.term}',
+                                    style: TextStyle(
+                                      fontFamily: 'Poppins',
+                                      fontSize: 12.5,
+                                      fontWeight: AppFonts.semibold,
+                                      color: state.activeTerm == term.term
+                                          ? AppColors.navy
+                                          : AppColors.text,
+                                    ),
+                                  ),
+                                ),
+                                Text(
+                                  '${_short(term.start)} – ${_short(term.end)}',
+                                  style: const TextStyle(
+                                    fontFamily: 'Poppins',
+                                    fontSize: 11.5,
+                                    color: AppColors.textSoft,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        const SizedBox(height: 4),
+                        const Text(
+                          'Subjects keep separate assessment and grade records for '
+                          'each term. Switching terms never deletes anything.',
+                          style: TextStyle(
+                            fontFamily: 'Poppins',
+                            fontSize: 11,
+                            color: AppColors.textFaint,
+                            height: 1.4,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                   const _SectionTitle('Data & Storage'),
                   AppCard(
                     child: Column(
                       children: [
                         _StorageRow(
+                          label: 'Classes',
+                          value:
+                              '${state.totalClasses} active · ${state.archivedClasses().length} archived',
+                        ),
+                        _StorageRow(
                           label: 'Records stored',
-                          value: '${state.students.length} students',
+                          value: '${state.students.length} students · '
+                              '${state.subjects.length} subjects',
                         ),
                         const _StorageRow(
                           label: 'Storage',
-                          value: 'Offline (this device)',
+                          value: 'Offline SQLite database',
                         ),
                         FutureBuilder<String>(
                           future: autoBackupDirPath(),
@@ -376,13 +528,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             small: true,
                           ),
                         ),
-                        const SizedBox(height: 6),
+                        const SizedBox(height: 10),
                         AppButton(
                           label: 'Open Reports & Backups',
                           variant: ButtonVariant.secondary,
                           icon: Ionicons.documentText,
                           onTap: () => Navigator.of(context).push(
                             MaterialPageRoute(builder: (_) => const ReportsScreen()),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        AppButton(
+                          label: 'Export database backup',
+                          variant: ButtonVariant.ghost,
+                          icon: Ionicons.saveOutline,
+                          onTap: _backupDatabase,
+                        ),
+                        const SizedBox(height: 10),
+                        AppButton(
+                          label: 'Restore from database file',
+                          variant: ButtonVariant.danger,
+                          icon: Ionicons.refreshOutline,
+                          onTap: _restoreDatabase,
+                        ),
+                        const SizedBox(height: 8),
+                        const Text(
+                          'A backup is a copy of the SQLite file with every '
+                          'learner, score, grade and attendance record. Restoring '
+                          'replaces everything currently on this device.',
+                          style: TextStyle(
+                            fontFamily: 'Poppins',
+                            fontSize: 11,
+                            color: AppColors.textFaint,
+                            height: 1.4,
                           ),
                         ),
                       ],
@@ -434,6 +612,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
   }
+}
+
+String _short(String iso) {
+  if (iso.isEmpty) return '—';
+  return iso;
 }
 
 class _SectionTitle extends StatelessWidget {

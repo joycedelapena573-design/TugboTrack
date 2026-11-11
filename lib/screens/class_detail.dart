@@ -32,6 +32,7 @@ class ClassDetailScreen extends StatefulWidget {
 class _ClassDetailScreenState extends State<ClassDetailScreen> {
   String _query = '';
   bool _addingStudent = false;
+  bool _showArchived = false;
   bool _attendanceOpen = true;
   final _newName = TextEditingController();
 
@@ -64,7 +65,12 @@ class _ClassDetailScreenState extends State<ClassDetailScreen> {
       );
     }
 
-    final roster = state.studentsOf(widget.sectionId);
+    final roster =
+        state.studentsOf(widget.sectionId, includeArchived: _showArchived);
+    final archivedCount = state
+        .studentsOf(widget.sectionId, includeArchived: true)
+        .where((student) => student.archived)
+        .length;
     final q = _query.trim().toLowerCase();
     final filtered = q.isEmpty
         ? roster
@@ -84,8 +90,9 @@ class _ClassDetailScreenState extends State<ClassDetailScreen> {
           children: [
             PageHeader(
               title: '${section.gradeLevel} — ${section.section}',
-              subtitle:
-                  'SY ${section.schoolYear} · ${roster.length} students',
+              subtitle: 'SY ${section.schoolYear} · ${roster.length} students · '
+                  '${section.curriculum.label}'
+                  '${section.archived ? ' · archived' : ''}',
               onBack: () => Navigator.of(context).pop(),
               right: Material(
                 color: AppColors.white,
@@ -163,7 +170,29 @@ class _ClassDetailScreenState extends State<ClassDetailScreen> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 18),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: () => _toggleArchive(state, section),
+                      icon: Icon(
+                        section.archived
+                            ? Ionicons.archiveOutline
+                            : Ionicons.archive,
+                        size: 16,
+                        color: AppColors.textSoft,
+                      ),
+                      label: Text(
+                        section.archived ? 'Restore class' : 'Archive class',
+                        style: const TextStyle(
+                          fontFamily: 'Poppins',
+                          fontSize: 12.5,
+                          fontWeight: AppFonts.semibold,
+                          color: AppColors.textSoft,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
 
                   /// Seat-tap attendance lives right here on the class screen.
                   if (_attendanceOpen)
@@ -192,6 +221,23 @@ class _ClassDetailScreenState extends State<ClassDetailScreen> {
                           color: AppColors.navyDark,
                         ),
                       ),
+                      if (archivedCount > 0)
+                        TextButton(
+                          onPressed: () => setState(
+                            () => _showArchived = !_showArchived,
+                          ),
+                          child: Text(
+                            _showArchived
+                                ? 'Hide archived'
+                                : 'Show archived ($archivedCount)',
+                            style: const TextStyle(
+                              fontFamily: 'Poppins',
+                              fontSize: 12,
+                              fontWeight: AppFonts.semibold,
+                              color: AppColors.blue,
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                   const SizedBox(height: 10),
@@ -329,16 +375,30 @@ class _ClassDetailScreenState extends State<ClassDetailScreen> {
                                   ),
                                 ),
                                 const SizedBox(width: 8),
-                                _BmiButton(
-                                  onTap: () => Navigator.of(context).push(
-                                    MaterialPageRoute(
-                                      builder: (_) => BmiScreen(
-                                        sectionId: widget.sectionId,
-                                        studentId: student.id,
+                                if (student.archived)
+                                  IconButton(
+                                    tooltip: 'Restore learner',
+                                    onPressed: () => state.archiveStudent(
+                                      student.id,
+                                      archived: false,
+                                    ),
+                                    icon: const Icon(
+                                      Ionicons.archiveOutline,
+                                      size: 18,
+                                      color: AppColors.navy,
+                                    ),
+                                  )
+                                else
+                                  _BmiButton(
+                                    onTap: () => Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (_) => BmiScreen(
+                                          sectionId: widget.sectionId,
+                                          studentId: student.id,
+                                        ),
                                       ),
                                     ),
                                   ),
-                                ),
                                 const SizedBox(width: 8),
                                 Container(
                                   width: 38,
@@ -382,6 +442,38 @@ class _ClassDetailScreenState extends State<ClassDetailScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _toggleArchive(AppState state, Section section) async {
+    if (section.archived) {
+      state.archiveSection(section.id, archived: false);
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Archive this class?'),
+        content: const Text(
+          'The class disappears from the active list and reports, but every '
+          'learner, score, term grade and attendance record is kept. You can '
+          'restore it any time from the dashboard.',
+        ),
+        actions: [
+          AppButton(
+            label: 'Cancel',
+            variant: ButtonVariant.ghost,
+            onTap: () => Navigator.of(dialogContext).pop(false),
+          ),
+          AppButton(
+            label: 'Archive',
+            onTap: () => Navigator.of(dialogContext).pop(true),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    state.archiveSection(section.id);
+    Navigator.of(context).pop();
   }
 
   Future<void> _import(AppState state) async {

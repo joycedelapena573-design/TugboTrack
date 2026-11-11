@@ -1,5 +1,6 @@
-This is a Flutter (Dart) mobile application targeting both iOS and Android.
-Prioritize mobile-first patterns, performance, and cross-platform compatibility.
+This is a Flutter (Dart) mobile application for Android (and iOS), built for
+Tugbo Integrated School: **TugboTrack**, the mobile-based offline class record
+system. Prioritize mobile-first patterns, performance, and offline correctness.
 
 ## Commands
 
@@ -9,7 +10,7 @@ toolchain is gone).
 ```bash
 flutter pub get        # install dependencies from pubspec.lock
 flutter analyze        # lint (flutter_lints) — must be clean
-flutter test           # run test/
+flutter test           # run test/ (sqflite_common_ffi gives real SQLite)
 flutter run            # run on a connected device or emulator
 flutter build apk      # Android release build
 ```
@@ -24,18 +25,59 @@ Do not upgrade dependencies just to change them; pubspec.lock is committed.
   `Navigator.push(MaterialPageRoute(...))`, no router package.
 - `lib/state/app_state.dart` — single `ChangeNotifier` source of truth; every
   mutation writes through to SQLite in `lib/data/database.dart` and schedules
-  the automatic CSV backup.
-- `lib/services/` — grading engine, BMI, CSV, student importer, backups, MPIN,
-  PDF/CSV reports.
-- `lib/widgets/` — shared UI kit (Screen, AppCard, AppButton, Field, chips),
-  seat board, pin pad, school logo, SVG decorations.
-- `lib/models/` — data model types; storage keys here must stay identical to
-  the ones the earlier builds wrote.
+  the debounced automatic CSV backup. Selectors live here too
+  (`classesOf`, `subjectsInTerm`, `gradeOf`, `finalGradeOf`, `attendanceSummary`).
+- `lib/services/grading.dart` — WW/PT/TE weighted initial grade, DO 8 s. 2015
+  transmutation, term grade, final grade, rounding helpers. Pure functions.
+- `lib/services/` — BMI (WHO 2007 BMI-for-age), CSV, student importer, backups,
+  MPIN, PDF reports.
+- `lib/data/database.dart` — schema v2, migrations, transactions, backup/restore.
+- `lib/widgets/` — shared UI kit (Screen, AppCard, AppButton, Field, chips,
+  Segmented), seat board, pin pad, school logo, SVG decorations.
+- `lib/models/models.dart` — domain types and the DepEd grading presets.
+
+## Academic model
+
+- DepEd three-term calendar: **Term 1–3** (`terms` in `models.dart`), not
+  quarters. School years are stored as names (`2026-2027`) with their terms in
+  `academic_terms`.
+- A **subject** belongs to a class and has a term span (`termStart`–`termEnd`):
+  one term, two terms, or the whole year. Never delete a subject when the term
+  changes — records are per term and history is preserved.
+- **Classes** (`Section` in Dart, `classes` in SQL) can be archived: all records
+  stay in the database and can be restored from the dashboard.
+- **Assessments** are grouped by `AssessmentCategory`: `writtenWorks` (WW),
+  `performanceTasks` (PT), `termExam` (TE). The legacy five-component keys
+  (`quizzes`, `assignments`, `activities`, `performanceTasks`, `examinations`)
+  map onto these in `AssessmentCategory.fromName` — keep that mapping.
+- Grade pipeline: per-category percentages → **initial grade** (weighted,
+  categories without scores redistribute their weight) → **term grade**
+  (transmuted when the subject enables it) → **final grade** (average of the
+  term grades of the terms the subject is offered in).
+
+## Database (schema v2)
+
+`tugbotrack.db`, opened with `PRAGMA foreign_keys = ON`, versioned with
+`onCreate`/`onUpgrade`. Tables: `kv`, `teachers`, `school_years`,
+`academic_terms`, `classes`, `subjects`, `students`, `class_students`,
+`assessments`, `student_scores`, `attendance`, `term_grades`, `final_grades`,
+`bmi_records`, `grading_configurations`, `grading_components`.
+
+- FK cascades from `classes`/`students`/`subjects` remove their children, so
+  delete only after the UI has confirmed with the teacher.
+- Multi-row writes run inside `db.transaction`.
+- Each subject owns a private grading configuration (`subj:<subjectId>`) so a
+  later change to a preset never rewrites historical weights.
+- `_migrateV1ToV2` renames the quarterly tables to `_v1_*`, creates the new
+  schema, copies every row (`Q1–Q3 → Terms 1–3`, `Q4` folded into Term 3,
+  five components mapped to WW/PT/TE), then drops the old tables — all inside
+  the upgrade transaction. Extend it, don't bypass it, when bumping the version.
+- `backupTo` / `restoreFrom` copy the SQLite file; restore must stay behind an
+  explicit confirmation.
 
 ## Rules
 
-- Everything stays offline: never add a network call for student data. All
-  records live in the on-device SQLite file `classtrack.db`.
+- Everything stays offline: never add a network call for student data.
 - The MPIN is stored only as a salted SHA-256 hash in the device keychain
   (`flutter_secure_storage`). Never log or print it, and never store student
   data anywhere but SQLite.
@@ -46,3 +88,5 @@ Do not upgrade dependencies just to change them; pubspec.lock is committed.
 - New packages must come from pub.dev and be added with `flutter pub add`,
   then verified against their current API (read the package source in
   `~/.pub-cache` if unsure).
+- No placeholder actions: a button either works against SQLite or it does not
+  ship.

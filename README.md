@@ -1,136 +1,152 @@
-# TIS ClassTrack — Tugbo Integrated School
+# TugboTrack — Tugbo Integrated School
 
-**Smarter Class Records, Made Simple.**
+**Mobile-Based Offline Class Record System.**
 
-A user-friendly, offline-first class record mobile app for teachers, built with
-**Flutter (Dart)** so it runs on **both iOS and Android** from one codebase.
-All student information, grades, attendance and BMI records are stored **locally
-on the device** in SQLite — no internet connection required — and protected by a
-**6-digit MPIN**.
+A teacher-friendly, fully offline class record app built with **Flutter (Dart)**
+and **SQLite** (`sqflite`), targeting **Android**. Student information, class
+records, assessments, grades, attendance and BMI all live in one local database
+on the device — no internet, no accounts, no cloud.
 
 ---
 
 ## Features
 
-### 1. Student information management
-- Add, edit, view and delete students (manual typing or bulk import).
-- Records organized by **grade level, section, subject, school year and grading period**.
-- Fully local **SQLite database** (`lib/data/database.dart`) for offline access — one
-  table each for sections, students, subjects, score sheets, scores, attendance
-  and BMI, written on every save and read back on launch.
-- **Import CSV** from the device's file manager (Name, LRN, Gender, Birthday,
-  Guardian, Contact, Seat columns — header aliases are auto-detected), or type
-  students one by one.
-- **"Add Student Information"** button reveals birthday (age auto-computed),
-  Learners Reference Number (LRN), guardian/parent name and contact number.
-- **Learner profile**: tapping a student's name shows *everything* — personal
-  info, guardian, attendance summary, per-subject grades and BMI history.
+### Dashboard
+- Total classes and learners, active school year and current term at a glance.
+- School-year selector and Term 1 / 2 / 3 switcher.
+- Today's attendance status and quick access to class records.
+- Archived classes stay archived with their records and can be restored.
 
-### 2. Grade recording & computation
-- Record scores for **quizzes, assignments, activities, performance tasks and
-  examinations** (per grading period Q1–Q4), with configurable highest scores.
-- Automatic weighted grade computation per subject (weights editable, presets
-  provided, must total 100%) with optional **DepEd transmutation** (DO 8, s. 2015).
-- Live quarterly grades, class average, highest/lowest, honor remarks and
-  achievement descriptors per subject.
-- Saved locally after every change.
+### Classes
+- Create, view, edit and **archive** classes (grade level + section + school
+  year + curriculum). Archiving preserves every learner, score and grade.
+- Organized by grade level, section, subject, school year and term.
+- Multiple classes and subjects per teacher.
 
-### 3. Attendance monitoring by seat
-- The teacher taps each student's **assigned seat number** on a seat board.
-- Four statuses: **Present (P), Late (L), Absent (A), Excused (E)** — pick a
-  "brush" then tap seats; long-press to clear; "Mark all present/absent" shortcuts.
-- Daily records with date navigation, live summary counts and attendance rate.
-- Stored locally for offline access.
+### Learners
+- Add, edit, view, search (name or LRN), archive and delete learners.
+- Learner profile: personal details, guardian, attendance summary, per-subject
+  term grades and BMI history.
+- **CSV import** from the device's file manager, or one-by-one entry.
+- Historical records are preserved; nothing is silently discarded.
 
-### 4. Class record management & reports
-- Search students by name or LRN inside each class; view/update class records.
-- Generate **class record reports** with scores, computed grades, class averages
-  and remarks (formal A4 layout with signature lines).
-- **Print** directly or **save/share as PDF** (`printing` package).
-- **CSV export** for class records, rosters and full backups (opens in Excel/Sheets).
-- **Automatic CSV backup after every save/change** (attendance, scores,
-  student edits…) into the app's `auto-backups/` folder — rolling set of
-  `students.csv`, `grades.csv`, `attendance.csv`, `bmi.csv`, `full-backup.csv`.
-- Learner profiles (4.6) and the "Add Student Information" panel (4.7) as above.
+### Three-term academic calendar
+- DepEd **Term 1–3** for SY 2026–2027 (and later years), each with its own
+  assessment and grade records.
+- Subjects may run for **one term, two terms or the whole year**; electives are
+  supported without disturbing other subjects.
+- Switching terms or school years **never** deletes or replaces subjects.
 
-### 5. BMI monitoring
-- Record height (cm) and weight (kg) per student with date.
-- Automatic BMI calculation with WHO interpretation:
-  Underweight / Normal / Overweight / Obese — color-coded with guidance text.
-- Stored locally; values stay **hidden until revealed** (privacy toggle) to
-  maintain confidentiality of student information.
+### Assessments and grading
+- Assessment categories: **Written Works (WW)**, **Performance Tasks (PT)** and
+  **Term Examination (TE)**, per subject and term.
+- Create assessments with titles and maximum scores, then enter scores in a
+  mobile-friendly grid.
+- Configurable weights per subject (DepEd presets for the Existing SHS and the
+  Strengthened SHS curricula: 25/50/25 academic, 20/60/20 TVL/Arts & Sports),
+  validated to total 100%.
+- Automatic computation: category percentages → **initial grade** → **term
+  grade** (DepEd Order 8, s. 2015 transmutation when enabled) → **final grade**
+  (average of the subject's term grades).
+- Grades are rounded half-up with no floating-point drift, and a failing grade
+  is never rounded into a passing one.
 
-### 6. 6-digit MPIN security
-- First-run **Set Up Your MPIN** screen (per the approved mockup) with teacher
-  name + create/confirm 6-digit MPIN.
-- MPIN required **every time the app opens** and whenever it returns from the
-  background; wrong attempts are counted and lock out for 30 s after 5 failures.
-- **Change MPIN** any time in Settings → Security.
-- The MPIN is stored as a **salted SHA-256 hash in the device keychain**
-  (iOS Keychain / Android Keystore via `flutter_secure_storage`) — never in plain text.
+### Attendance
+- Seat-based board with **Present / Late / Absent / Excused**.
+- Day navigation, edits per learner, per-day clearing, and summaries
+  (days recorded, totals, attendance rate).
+
+### Reports
+- Class record (PDF + CSV), term grade report, final grade report, learner
+  roster, attendance summary, and a full CSV backup.
+- Print or share PDFs from the device.
+
+### BMI monitoring
+- Height/weight entry per learner with BMI history.
+- Interpreted against the **WHO 2007 BMI-for-age** reference for learners aged
+  5–19 using the record date, birthday and sex (falling back to adult cut-offs
+  when those are unknown) — not adult categories applied universally.
+
+### Security and backups
+- **6-digit MPIN**: set up on first launch, required on every open and when the
+  app returns from the background, changeable in Settings. Stored only as a
+  salted SHA-256 hash in the device keychain.
+- **Automatic CSV backup** after every save, plus on-demand full CSV export.
+- **Database backup and restore** (copy of the SQLite file), with confirmation
+  before anything destructive.
 
 ---
 
-## Screens (matching the approved designs)
+## Database (schema v2)
 
-| Screen | File | Notes |
-| --- | --- | --- |
-| Splash / loading page | `lib/screens/splash.dart` | Recreated from mockup 1 — school seal, ClassTrack wordmark with grad cap, script tagline, loading pill + progress bar. Shown on **every** app open, then routes to MPIN setup or unlock. |
-| MPIN setup | `lib/screens/mpin_setup.dart` | Recreated from mockup 2, adapted to **6 digits** (per requirement 6). |
-| MPIN unlock | `lib/screens/mpin_login.dart` | Dot display + numeric keypad. |
-| Main shell (tabs) | `lib/screens/main_shell.dart` | Home / Grades / More, re-locks when the app backgrounds. |
-| Home / classes | `lib/screens/home.dart` | Greeting, stats, class cards. |
-| Class detail | `lib/screens/class_detail.dart` | Roster, subjects, import, quick actions. |
-| Attendance | `lib/screens/attendance.dart` | Seat board with P/L/A/E. |
-| Grade book | `lib/screens/grades.dart` | Items, score grid, computed grades. |
-| BMI | `lib/screens/bmi.dart` | Record + history with privacy toggle. |
-| Reports | `lib/screens/reports.dart` | Print / PDF / CSV / backups. |
-| Settings | `lib/screens/settings.dart` | Name, change MPIN, storage info. |
+One SQLite file (`tugbotrack.db`) with foreign keys, indexes, transactions and
+migrations:
+
+`teachers`, `school_years`, `academic_terms`, `classes`, `subjects`, `students`,
+`class_students`, `assessments`, `student_scores`, `attendance`, `term_grades`,
+`final_grades`, `bmi_records`, `grading_configurations`, `grading_components`,
+plus `kv` for app settings.
+
+- The database is created automatically on first launch and seeded with the
+  current school year, its three terms and the DepEd grading presets.
+- Upgrading from the earlier quarterly build migrates every row (Q1–Q3 → Terms
+  1–3, the five old components → WW/PT/TE, weights preserved per subject) inside
+  a single transaction; the old tables are dropped only after the copy succeeds.
+- Deleting a class or learner is a confirmed action and cascades to the records
+  that belong to it.
+
+---
+
+## Screens
+
+| Screen | File |
+| --- | --- |
+| Splash | `lib/screens/splash.dart` |
+| MPIN setup / unlock | `lib/screens/mpin_setup.dart`, `mpin_login.dart` |
+| Main shell (tabs, re-locks on background) | `lib/screens/main_shell.dart` |
+| Dashboard | `lib/screens/home.dart` |
+| Class detail (roster, attendance, archive) | `lib/screens/class_detail.dart` |
+| Grade book (assessments + term grades) | `lib/screens/grades.dart` |
+| Attendance (seat board) | `lib/screens/attendance.dart` |
+| BMI monitoring | `lib/screens/bmi.dart` |
+| Reports | `lib/screens/reports.dart` |
+| Settings (calendar, backups, MPIN, logo) | `lib/screens/settings.dart` |
+| Class / subject / learner forms | `section_form.dart`, `subject_form.dart`, `student_form.dart` |
 
 ## Project structure
 
 ```
-assets/                 # school seal, app icons and Poppins/Caveat fonts
-android/, ios/          # Flutter platform projects (flutter create)
+assets/                 # school seal, app icons, Poppins/Caveat fonts
+android/, ios/          # Flutter platform projects
 lib/main.dart           # providers, theme, splash entry point
-lib/models/             # data model types (sections, students, grades, …)
-lib/data/               # SQLite layer (sqflite) + legacy import
-lib/state/              # app store (ChangeNotifier) and MPIN lock state
-lib/services/           # grading engine, BMI, CSV, importer, backups, MPIN, PDF reports
+lib/models/             # domain types and DepEd grading presets
+lib/data/               # SQLite schema, migrations, backup/restore
+lib/state/              # app store (ChangeNotifier) and MPIN lock
+lib/services/           # grading, BMI, CSV, importer, backups, MPIN, PDFs
 lib/screens/            # one file per screen
-lib/widgets/            # shared UI kit, seat board, pin pad, school logo, decorations
-test/                   # pure-Dart tests for grading, BMI and CSV
+lib/widgets/            # shared UI kit, seat board, pin pad, school logo
+test/                   # grading, calendar, migration, BMI and CSV tests
 ```
 
 ## Getting started
 
 ```bash
 flutter pub get
-flutter run             # on a connected device or emulator
+flutter run             # on a connected Android device or emulator
+flutter build apk       # Android release build
 ```
 
-Build release binaries:
+## Verification
 
-```bash
-flutter build apk       # Android
-flutter build ipa       # iOS (requires Xcode)
-```
-
-## Verification performed
-
-- `flutter analyze` — no issues found
-- `flutter test` — all tests pass (grade computation, weight redistribution,
-  DepEd transmutation, BMI interpretation, CSV round-trip)
+- `flutter analyze` — no issues found.
+- `flutter test` — 19 tests covering weighted term grades, weight
+  redistribution, DO 8 transmutation bands, rounding, final-grade averaging,
+  three-term subject spans, attendance counts, WHO BMI-for-age, CSV export, and
+  a real SQLite migration from the quarterly database plus fresh-install
+  seeding (via `sqflite_common_ffi`).
 
 ## Notes
 
-- **MPIN length:** requirement 6 specifies a 6-digit MPIN, so the setup screen
-  follows the mockup's design with 6-digit fields.
-- **School logo:** `assets/school-logo.png` is a faithful vector recreation of
-  the Tugbo Integrated School seal (torch, open book, laurel, 1965 ribbon).
-  Teachers can replace it from Settings → School Logo and pick their own image.
 - Data never leaves the device unless the teacher explicitly shares an export.
-- **Storage:** all records live in the on-device SQLite file `classtrack.db`.
-  Data saved by an older build in AsyncStorage is imported into SQLite
-  automatically on first launch, then removed so SQLite is the single source
-  of truth.
+- Recorded data can be recovered either from the CSV snapshots or from a
+  database backup file created in Settings.

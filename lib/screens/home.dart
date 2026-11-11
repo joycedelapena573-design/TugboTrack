@@ -42,10 +42,17 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final sectionList = state.sections.values.toList()
-      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
-    final totalStudents = state.students.length;
+    final schoolYear = state.activeSchoolYear ?? currentSchoolYear();
+    final sectionList = state.classesOf(schoolYear);
+    final archived = state.archivedClasses();
+    final totalStudents = state.totalStudents;
+    final subjectCount = sectionList.fold<int>(
+      0,
+      (sum, section) => sum + state.subjectsOf(section.id).length,
+    );
     final today = todayIso();
+    final markedToday =
+        sectionList.where((s) => state.attendance['${s.id}::$today'] != null).length;
 
     final q = _query.trim().toLowerCase();
     final visibleList = q.isEmpty
@@ -144,11 +151,81 @@ class _HomeScreenState extends State<HomeScreen> {
               Expanded(
                 child: _Stat(
                   icon: Ionicons.book,
-                  value: '${state.subjects.length}',
+                  value: '$subjectCount',
                   label: 'Subjects',
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 12),
+          AppCard(
+            style: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Ionicons.calendarOutline,
+                        size: 18, color: AppColors.navy),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'School Year $schoolYear',
+                        style: const TextStyle(
+                          fontFamily: 'Poppins',
+                          fontSize: 13.5,
+                          fontWeight: AppFonts.semibold,
+                          color: AppColors.navyDark,
+                        ),
+                      ),
+                    ),
+                    if (archived.isNotEmpty)
+                      GestureDetector(
+                        onTap: () => _openArchived(state, archived),
+                        child: Text(
+                          '${archived.length} archived',
+                          style: const TextStyle(
+                            fontFamily: 'Poppins',
+                            fontSize: 11.5,
+                            fontWeight: AppFonts.semibold,
+                            color: AppColors.blue,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Segmented<int>(
+                  options: [
+                    for (final term in terms)
+                      SegmentedOption(term, termLabel(term)),
+                  ],
+                  value: state.activeTerm,
+                  onChange: (term) => context.read<AppState>().setActiveTerm(term),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    const Icon(Ionicons.checkmarkDone,
+                        size: 16, color: AppColors.green),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        markedToday == 0
+                            ? 'Attendance not recorded today'
+                            : 'Attendance recorded for $markedToday of '
+                                '${sectionList.length} classes today',
+                        style: const TextStyle(
+                          fontFamily: 'Poppins',
+                          fontSize: 11.5,
+                          color: AppColors.textSoft,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 22),
           Row(
@@ -312,8 +389,102 @@ class _HomeScreenState extends State<HomeScreen> {
                   'Nothing matches “${_query.trim()}”. Try another grade level, section or school year.',
             )
           else
-            for (final section in visibleList) _ClassCard(section: section, today: today),
+            for (final section in visibleList)
+              _ClassCard(section: section, today: today),
         ],
+      ),
+    );
+  }
+
+  /// Archived classes are kept with all of their records; this sheet restores
+  /// one to the active list.
+  Future<void> _openArchived(AppState state, List<Section> archived) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.bg,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Archived classes',
+                style: TextStyle(
+                  fontFamily: 'Poppins',
+                  fontSize: 16,
+                  fontWeight: AppFonts.bold,
+                  color: AppColors.navyDark,
+                ),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Archived classes and their records stay in the database.',
+                style: TextStyle(
+                  fontFamily: 'Poppins',
+                  fontSize: 12,
+                  color: AppColors.textSoft,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: archived.length,
+                  itemBuilder: (context, index) {
+                    final section = archived[index];
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: AppCard(
+                        style: const EdgeInsets.all(12),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    section.title,
+                                    style: const TextStyle(
+                                      fontFamily: 'Poppins',
+                                      fontSize: 14,
+                                      fontWeight: AppFonts.semibold,
+                                      color: AppColors.navyDark,
+                                    ),
+                                  ),
+                                  Text(
+                                    'SY ${section.schoolYear} · '
+                                    '${state.studentsOf(section.id, includeArchived: true).length} learners',
+                                    style: const TextStyle(
+                                      fontFamily: 'Poppins',
+                                      fontSize: 11.5,
+                                      color: AppColors.textSoft,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () {
+                                state.archiveSection(section.id, archived: false);
+                                Navigator.of(sheetContext).pop();
+                              },
+                              child: const Text('Restore'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

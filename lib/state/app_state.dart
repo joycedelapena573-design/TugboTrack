@@ -1,23 +1,31 @@
 /// Offline-first app state. The UI renders from this in-memory store, every
-/// change is mirrored into the on-device SQLite database (see `data/database.dart`)
-/// and every mutation schedules an automatic CSV backup.
+/// change is mirrored into the on-device SQLite database (see
+/// `data/database.dart`) and every mutation schedules an automatic CSV backup.
 library;
+
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
 import '../data/database.dart';
 import '../models/models.dart';
 import '../services/backup.dart';
+import '../services/grading.dart';
 import '../utils/format.dart';
 import '../utils/ids.dart';
 
 class AppState extends ChangeNotifier {
-  AppState({DatabaseService? database}) : _db = database ?? DatabaseService.instance;
+  AppState({DatabaseService? database})
+      : _db = database ?? DatabaseService.instance;
 
   final DatabaseService _db;
 
   bool hydrated = false;
   String teacherName = '';
+  String? activeSectionId;
+  int activeTerm = 1;
+  String? activeSchoolYear;
+
   Map<String, Section> sections = {};
   Map<String, Student> students = {};
   Map<String, Subject> subjects = {};
@@ -25,7 +33,11 @@ class AppState extends ChangeNotifier {
   ScoreMap scores = {};
   Map<String, AttendanceDay> attendance = {};
   Map<String, BmiRecord> bmi = {};
-  String? activeSectionId;
+  Map<String, GradingConfig> gradingConfigs = {};
+  Map<String, SchoolYear> schoolYears = {};
+  List<AcademicTerm> academicTerms = [];
+  Map<String, TermGradeRecord> termGrades = {};
+  Map<String, FinalGradeRecord> finalGrades = {};
 
   /// Teacher-chosen school logo file path; null = bundled default.
   String? schoolLogoUri;
@@ -41,6 +53,8 @@ class AppState extends ChangeNotifier {
       final data = await _db.loadAll();
       teacherName = data.teacherName;
       activeSectionId = data.activeSectionId;
+      activeTerm = data.activeTerm.clamp(1, 3);
+      activeSchoolYear = data.activeSchoolYear;
       schoolLogoUri = data.schoolLogoUri;
       sections = data.sections;
       students = data.students;
@@ -49,6 +63,22 @@ class AppState extends ChangeNotifier {
       scores = data.scores;
       attendance = data.attendance;
       bmi = data.bmi;
+      gradingConfigs = data.gradingConfigs;
+      schoolYears = data.schoolYears;
+      academicTerms = data.academicTerms;
+      termGrades = data.termGrades;
+      finalGrades = data.finalGrades;
+
+      // Seed the built-in presets in memory as well, so a fresh install shows
+      // them even before the first settings change is written.
+      for (final config in builtInGradingConfigs) {
+        gradingConfigs.putIfAbsent(config.id, () => config);
+      }
+      activeSchoolYear ??= currentSchoolYear();
+      if (sections.isEmpty && activeSectionId != null) activeSectionId = null;
+      if (activeSectionId != null && !sections.containsKey(activeSectionId)) {
+        activeSectionId = null;
+      }
     } catch (error) {
       // ignore: avoid_print
       print('[state] could not read the SQLite database: $error');
@@ -70,7 +100,7 @@ class AppState extends ChangeNotifier {
 
   void setTeacherName(String name) {
     teacherName = name.trim();
-    _db.saveSetting(SettingsKey.teacherName, teacherName);
+    _db.saveTeacherName(teacherName);
     _changed();
   }
 
@@ -80,10 +110,78 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setActiveTerm(int term) {
+    activeTerm = term.clamp(1, 3);
+    _db.saveSetting(SettingsKey.activeTerm, '$activeTerm');
+    notifyListeners();
+  }
+
+  void setActiveSchoolYear(String year) {
+    activeSchoolYear = year;
+    _db.saveSetting(SettingsKey.activeSchoolYear, year);
+    notifyListeners();
+  }
+
   void setSchoolLogo(String? uri) {
     schoolLogoUri = uri;
     _db.saveSetting(SettingsKey.schoolLogoUri, uri);
     notifyListeners();
+  }
+
+  /* ------------------------------ school calendar --------------------------- */
+
+  List<String> get schoolYearNames {
+    final names = schoolYears.values.map((year) => year.name).toList()..sort();
+    if (names.isEmpty) names.add(currentSchoolYear());
+    return names.reversed.toList();
+  }
+
+  List<AcademicTerm> termsOf(String? schoolYear) {
+    final year = schoolYear ?? activeSchoolYear ?? currentSchoolYear();
+    return academicTerms.where((term) => term.schoolYear == year).toList()
+      ..sort((a, b) => a.term.compareTo(b.term));
+  }
+
+  AcademicTerm? termInfo(int term, [String? schoolYear]) {
+    final year = schoolYear ?? activeSchoolYear ?? currentSchoolYear();
+    for (final value in academicTerms) {
+      if (value.schoolYear == year && value.term == term) return value;
+    }
+    return null;
+  }
+
+  void addSchoolYear(String name, {bool makeActive = false}) {
+    final clean = name.trim();
+    if (clean.isEmpty) return;
+    final value = SchoolYear(
+      id: 'sy-$clean',
+      name: clean,
+      isActive: makeActive,
+      createdAt: DateTime.now().millisecondsSinceEpoch,
+    );
+    schoolYears[value.id] = value;
+    _db.putSchoolYear(value);
+    if (makeActive) setActiveSchoolYear(clean);
+    _changed();
+  }
+
+  void updateTermDates(int term, {String? start, String? end}) {
+    final year = activeSchoolYear ?? currentSchoolYear();
+    final existing = termInfo(term);
+    final updated = AcademicTerm(
+      id: existing?.id ?? 'sy-$year::t$term',
+      schoolYear: year,
+      term: term,
+      start: start ?? existing?.start ?? '',
+      end: end ?? existing?.end ?? '',
+    );
+    academicTerms = [
+      for (final value in academicTerms)
+        if (!(value.schoolYear == year && value.term == term)) value,
+      updated,
+    ];
+    _db.putAcademicTerms([updated]);
+    _changed();
   }
 
   /* -------------------------------- sections -------------------------------- */
@@ -92,12 +190,14 @@ class AppState extends ChangeNotifier {
     required String gradeLevel,
     required String section,
     required String schoolYear,
+    Curriculum curriculum = Curriculum.existingShs,
   }) {
     final value = Section(
       id: newId(),
       gradeLevel: gradeLevel,
       section: section,
       schoolYear: schoolYear,
+      curriculum: curriculum,
       createdAt: DateTime.now().millisecondsSinceEpoch,
     );
     sections[value.id] = value;
@@ -109,19 +209,39 @@ class AppState extends ChangeNotifier {
   }
 
   void updateSection(
-    String id,
-    {String? gradeLevel, String? section, String? schoolYear}) {
+    String id, {
+    String? gradeLevel,
+    String? section,
+    String? schoolYear,
+    Curriculum? curriculum,
+  }) {
     final prev = sections[id];
     if (prev == null) return;
     sections[id] = prev.copyWith(
       gradeLevel: gradeLevel,
       section: section,
       schoolYear: schoolYear,
+      curriculum: curriculum,
     );
     _db.putSection(sections[id]!);
     _changed();
   }
 
+  /// Archives a class (records are kept) or restores it to the active list.
+  void archiveSection(String id, {bool archived = true}) {
+    final prev = sections[id];
+    if (prev == null) return;
+    sections[id] = prev.copyWith(archived: archived);
+    _db.putSection(sections[id]!);
+    if (archived && activeSectionId == id) {
+      activeSectionId = null;
+      _db.saveSetting(SettingsKey.activeSectionId, null);
+    }
+    _changed();
+  }
+
+  /// Permanently deletes a class and every record that belongs to it. The UI
+  /// asks for confirmation before calling this.
   void deleteSection(String id) {
     final removedStudentIds = students.values
         .where((s) => s.sectionId == id)
@@ -136,31 +256,21 @@ class AppState extends ChangeNotifier {
     students.removeWhere((_, s) => s.sectionId == id);
     subjects.removeWhere((_, s) => s.sectionId == id);
     sheets.removeWhere((_, sheet) => removedSubjectIds.contains(sheet.subjectId));
-    scores.removeWhere((key, _) => removedSubjectIds.contains(key.split('|').first));
-    final removedDays = attendance.values.where((d) => d.sectionId == id).toList();
-    for (final day in removedDays) {
-      attendance.remove(day.id);
-      _db.removeAttendanceDay(day.id);
-    }
+    scores.removeWhere(
+      (key, _) => removedSubjectIds.contains(key.split('|').first),
+    );
+    attendance.removeWhere((_, day) => day.sectionId == id);
     bmi.removeWhere((_, record) => removedStudentIds.contains(record.studentId));
+    termGrades.removeWhere(
+      (_, record) => removedSubjectIds.contains(record.subjectId),
+    );
+    finalGrades.removeWhere(
+      (_, record) => removedSubjectIds.contains(record.subjectId),
+    );
 
     if (activeSectionId == id) activeSectionId = null;
 
-    _db.removeSection(id);
-    for (final studentId in removedStudentIds) {
-      _db.removeStudent(studentId);
-    }
-    for (final subjectId in removedSubjectIds) {
-      _db.removeSubject(subjectId);
-    }
-    for (final key in scores.keys.toList()) {
-      if (removedSubjectIds.contains(key.split('|').first)) {
-        _db.saveScore(key, null);
-      }
-    }
-    for (final record in bmi.values) {
-      _db.removeBmi(record.studentId, record.date);
-    }
+    _db.removeSection(id); // cascades to every child row
     _db.saveSetting(SettingsKey.activeSectionId, activeSectionId);
     _changed();
   }
@@ -193,7 +303,7 @@ class AppState extends ChangeNotifier {
     final taken = <String>{
       for (final s in students.values) '${s.sectionId}#${s.seatNumber}',
     };
-    var now = DateTime.now().millisecondsSinceEpoch;
+    final now = DateTime.now().millisecondsSinceEpoch;
     var added = 0;
     for (final draft in drafts) {
       var seat = draft.seatNumber;
@@ -238,18 +348,24 @@ class AppState extends ChangeNotifier {
     if (birthday != null) {
       nextBirthday = normalizeBirthday(birthday) ?? prev.birthday;
     }
-    students[id] = Student(
-      id: prev.id,
-      sectionId: prev.sectionId,
-      seatNumber: seatNumber ?? prev.seatNumber,
-      fullName: fullName ?? prev.fullName,
-      lrn: lrn ?? prev.lrn,
-      gender: gender ?? prev.gender,
+    students[id] = prev.copyWith(
+      seatNumber: seatNumber,
+      fullName: fullName,
+      lrn: lrn,
+      gender: gender,
       birthday: nextBirthday,
-      guardianName: guardianName ?? prev.guardianName,
-      guardianContact: guardianContact ?? prev.guardianContact,
-      createdAt: prev.createdAt,
+      guardianName: guardianName,
+      guardianContact: guardianContact,
     );
+    _db.putStudent(students[id]!);
+    _changed();
+  }
+
+  /// Archives a learner (records preserved) or restores them to the roster.
+  void archiveStudent(String id, {bool archived = true}) {
+    final prev = students[id];
+    if (prev == null) return;
+    students[id] = prev.copyWith(archived: archived);
     _db.putStudent(students[id]!);
     _changed();
   }
@@ -272,14 +388,7 @@ class AppState extends ChangeNotifier {
     for (final record in removedBmi) {
       bmi.remove(record.id);
     }
-
-    _db.removeStudent(id);
-    for (final key in scores.keys.toList()) {
-      if (key.contains('|$id|')) _db.saveScore(key, null);
-    }
-    for (final record in removedBmi) {
-      _db.removeBmi(record.studentId, record.date);
-    }
+    _db.removeStudent(id); // cascades to scores, attendance, grades, BMI
     _changed();
   }
 
@@ -298,21 +407,31 @@ class AppState extends ChangeNotifier {
     required String name,
     required String teacherName,
     Weights? weights,
-    bool transmute = false,
+    bool transmute = true,
+    int termStart = 1,
+    int termEnd = 3,
+    String configId = '',
   }) {
     final value = Subject(
       id: newId(),
       sectionId: sectionId,
       name: name.trim(),
       teacherName: teacherName.trim(),
-      weights: weights ?? Map<ComponentKey, double>.from(defaultWeights),
+      weights: weights ??
+          Map<AssessmentCategory, double>.from(depedAcademicWeights),
       transmute: transmute,
+      termStart: termStart.clamp(1, 3),
+      termEnd: termEnd.clamp(1, 3),
+      configId: configId,
       createdAt: DateTime.now().millisecondsSinceEpoch,
     );
-    subjects[value.id] = value;
-    _db.putSubject(value);
+    final fixed = value.termEnd < value.termStart
+        ? value.copyWith(termEnd: value.termStart)
+        : value;
+    subjects[fixed.id] = fixed;
+    _db.putSubject(fixed);
     _changed();
-    return value;
+    return fixed;
   }
 
   void updateSubject(
@@ -321,16 +440,26 @@ class AppState extends ChangeNotifier {
     String? teacherName,
     Weights? weights,
     bool? transmute,
+    int? termStart,
+    int? termEnd,
+    String? configId,
   }) {
     final prev = subjects[id];
     if (prev == null) return;
-    subjects[id] = prev.copyWith(
+    var next = prev.copyWith(
       name: name,
       teacherName: teacherName,
       weights: weights,
       transmute: transmute,
+      termStart: termStart,
+      termEnd: termEnd,
+      configId: configId,
     );
-    _db.putSubject(subjects[id]!);
+    if (next.termEnd < next.termStart) {
+      next = next.copyWith(termEnd: next.termStart);
+    }
+    subjects[id] = next;
+    _db.putSubject(next);
     _changed();
   }
 
@@ -339,113 +468,122 @@ class AppState extends ChangeNotifier {
     final removedSheetIds =
         sheets.values.where((s) => s.subjectId == id).map((s) => s.id).toSet();
     sheets.removeWhere((_, sheet) => sheet.subjectId == id);
-    scores.removeWhere((key, _) => removedSheetIds.contains(key.split('|').first));
+    scores.removeWhere(
+      (key, _) => removedSheetIds.contains(key.split('|').first),
+    );
+    termGrades.removeWhere((_, record) => record.subjectId == id);
+    finalGrades.removeWhere((_, record) => record.subjectId == id);
 
-    _db.removeSubject(id);
-    for (final sheetId in removedSheetIds) {
-      _db.removeSheet(sheetId);
-      for (final key in scores.keys.toList()) {
-        if (key.startsWith('$sheetId|')) _db.saveScore(key, null);
-      }
-    }
+    _db.removeSubject(id); // cascades to assessments, scores and grades
     _changed();
   }
 
   /* ------------------------------- score sheets ----------------------------- */
 
-  String sheetIdOf(String subjectId, int quarter) => '$subjectId::q$quarter';
+  String sheetIdOf(String subjectId, int term) => '$subjectId::t$term';
 
-  ScoreSheet ensureSheet(String subjectId, int quarter) {
-    final id = sheetIdOf(subjectId, quarter);
+  ScoreSheet ensureSheet(String subjectId, int term) {
+    final id = sheetIdOf(subjectId, term);
     final existing = sheets[id];
     if (existing != null) return existing;
     final value = ScoreSheet(
       id: id,
       subjectId: subjectId,
-      quarter: quarter,
+      term: term,
       items: {
-        for (final component in ComponentKey.values) component: <AssessmentItem>[],
+        for (final category in AssessmentCategory.values)
+          category: <AssessmentItem>[],
       },
     );
     sheets[id] = value;
-    _db.putSheet(value);
     return value;
   }
 
-  void addItem(
+  ScoreSheet? sheetOf(String subjectId, int term) =>
+      sheets[sheetIdOf(subjectId, term)];
+
+  AssessmentItem addItem(
     String subjectId,
-    int quarter,
-    ComponentKey component,
+    int term,
+    AssessmentCategory category,
     String title,
     double max,
   ) {
-    final sheet = ensureSheet(subjectId, quarter);
-    final items = List<AssessmentItem>.from(sheet.items[component] ?? const [])
+    final sheet = ensureSheet(subjectId, term);
+    final items = List<AssessmentItem>.from(sheet.itemsOf(category))
       ..add(AssessmentItem(
         id: newId(),
         title: title.trim(),
         max: max > 0 ? max : 100,
+        category: category,
       ));
-    sheets[sheet.id] = sheet.copyWith(items: {
-      ...sheet.items,
-      component: items,
-    });
-    _db.putSheet(sheets[sheet.id]!);
+    final updated = sheet.copyWith(items: {...sheet.items, category: items});
+    sheets[sheet.id] = updated;
+    _db.putAssessment(subjectId, term, items.last, items.length - 1);
     _changed();
+    return items.last;
   }
 
   void updateItem(
     String subjectId,
-    int quarter,
-    ComponentKey component,
+    int term,
+    AssessmentCategory category,
     String itemId, {
     String? title,
     double? max,
   }) {
-    final id = sheetIdOf(subjectId, quarter);
-    final sheet = sheets[id];
+    final sheet = sheetOf(subjectId, term);
     if (sheet == null) return;
-    final items = (sheet.items[component] ?? const <AssessmentItem>[])
-        .map((item) => item.id == itemId
-            ? item.copyWith(
-                title: title,
-                max: (max != null && max > 0) ? max : null,
-              )
-            : item)
-        .toList();
-    sheets[id] = sheet.copyWith(items: {...sheet.items, component: items});
-    _db.putSheet(sheets[id]!);
+    var position = 0;
+    final items = <AssessmentItem>[];
+    for (final item in sheet.itemsOf(category)) {
+      if (item.id == itemId) {
+        final next = item.copyWith(
+          title: title,
+          max: (max != null && max > 0) ? max : null,
+        );
+        items.add(next);
+        _db.putAssessment(subjectId, term, next, position);
+      } else {
+        items.add(item);
+      }
+      position += 1;
+    }
+    sheets[sheet.id] = sheet.copyWith(items: {...sheet.items, category: items});
     _changed();
   }
 
   void deleteItem(
     String subjectId,
-    int quarter,
-    ComponentKey component,
+    int term,
+    AssessmentCategory category,
     String itemId,
   ) {
-    final id = sheetIdOf(subjectId, quarter);
-    final sheet = sheets[id];
+    final sheet = sheetOf(subjectId, term);
     if (sheet == null) return;
-    final items = (sheet.items[component] ?? const <AssessmentItem>[])
+    final items = sheet.itemsOf(category)
         .where((item) => item.id != itemId)
         .toList();
-    sheets[id] = sheet.copyWith(items: {...sheet.items, component: items});
+    sheets[sheet.id] = sheet.copyWith(items: {...sheet.items, category: items});
 
-    final prefix = '$id|';
-    final removedKeys = scores.keys
-        .where((key) => key.startsWith(prefix) && key.endsWith('|$itemId'))
-        .toList();
-    for (final key in removedKeys) {
+    final prefix = '${sheet.id}|';
+    final removedKeys =
+        scores.keys.where((key) => key.startsWith(prefix) && key.endsWith('|$itemId'));
+    for (final key in removedKeys.toList()) {
       scores.remove(key);
-      _db.saveScore(key, null);
     }
-
-    _db.putSheet(sheets[id]!);
+    _db.removeAssessment(itemId); // cascades to its scores
     _changed();
   }
 
-  void setScore(String sheetId, String studentId, String itemId, double? value) {
+  void setScore(
+    String sheetId,
+    String studentId,
+    String itemId,
+    double? value, {
+    int? term,
+    String? subjectId,
+  }) {
     final key = '$sheetId|$studentId|$itemId';
     if (value == null || value.isNaN) {
       scores.remove(key);
@@ -453,8 +591,89 @@ class AppState extends ChangeNotifier {
       scores[key] = value;
     }
     _db.saveScore(key, value);
+
+    // Keep the stored term grades in step with the scores.
+    final sheet = sheets[sheetId];
+    final t = term ?? sheet?.term;
+    final s = subjectId ?? sheet?.subjectId;
+    if (s != null && t != null) _persistGrades(s, t);
+
     _changed();
   }
+
+  /* --------------------------------- grades --------------------------------- */
+
+  TermGradeResult gradeOf(Subject subject, int term, String studentId) {
+    return computeTermGrade(
+      subject.weights,
+      subject.transmute,
+      sheetOf(subject.id, term),
+      scores,
+      studentId,
+    );
+  }
+
+  /// Average of the subject's term grades for the terms it is offered in.
+  double? finalGradeOf(Subject subject, String studentId) {
+    final values = <double?>[
+      for (final term in subject.activeTerms)
+        gradeOf(subject, term, studentId).termGrade,
+    ];
+    return computeFinalGrade(values);
+  }
+
+  /// Recomputes and stores the term grades of a subject (and its final grade)
+  /// so reports and historical records keep their values.
+  void _persistGrades(String subjectId, int term) {
+    final subject = subjects[subjectId];
+    if (subject == null) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final roster = studentsOf(subject.sectionId);
+    final records = <TermGradeRecord>[];
+    for (final student in roster) {
+      final result = gradeOf(subject, term, student.id);
+      if (!result.hasGrade) continue;
+      records.add(TermGradeRecord(
+        subjectId: subjectId,
+        term: term,
+        studentId: student.id,
+        initialGrade: result.initialGrade!,
+        termGrade: result.termGrade!,
+        computedAt: now,
+      ));
+      termGrades['$subjectId|$term|${student.id}'] = records.last;
+    }
+    _db.saveTermGrades(records, term: term, subjectId: subjectId);
+
+    final finals = <FinalGradeRecord>[];
+    for (final student in roster) {
+      final value = finalGradeOf(subject, student.id);
+      if (value == null) continue;
+      finals.add(FinalGradeRecord(
+        subjectId: subjectId,
+        studentId: student.id,
+        grade: value,
+        computedAt: now,
+      ));
+      finalGrades['$subjectId|${student.id}'] = finals.last;
+    }
+    _db.saveFinalGrades(finals, subjectId: subjectId);
+  }
+
+  /// Recomputes every stored grade (used after imports or a restore).
+  void recomputeAllGrades() {
+    for (final subject in subjects.values) {
+      for (final term in subject.activeTerms) {
+        _persistGrades(subject.id, term);
+      }
+    }
+  }
+
+  TermGradeRecord? storedTermGrade(String subjectId, int term, String studentId) =>
+      termGrades['$subjectId|$term|$studentId'];
+
+  FinalGradeRecord? storedFinalGrade(String subjectId, String studentId) =>
+      finalGrades['$subjectId|$studentId'];
 
   /* -------------------------------- attendance ------------------------------- */
 
@@ -505,7 +724,7 @@ class AppState extends ChangeNotifier {
     final id = '$sectionId::$date';
     final statuses = <String, AttendanceStatus>{
       for (final s in students.values)
-        if (s.sectionId == sectionId) s.id: status,
+        if (s.sectionId == sectionId && !s.archived) s.id: status,
     };
     final day = AttendanceDay(
       id: id,
@@ -524,6 +743,34 @@ class AppState extends ChangeNotifier {
     if (attendance.remove(id) == null) return;
     _db.removeAttendanceDay(id);
     _changed();
+  }
+
+  /// Attendance totals of a class, optionally limited to one term.
+  AttendanceSummary attendanceSummary(String sectionId, {int? term}) {
+    var present = 0, late = 0, absent = 0, excused = 0, days = 0;
+    final ranges = term == null ? null : termsOf(activeSchoolYear);
+    final info = ranges?.where((t) => t.term == term).firstOrNull;
+    for (final day in attendance.values) {
+      if (day.sectionId != sectionId) continue;
+      if (info != null && info.start.isNotEmpty && info.end.isNotEmpty) {
+        if (day.date.compareTo(info.start) < 0 ||
+            day.date.compareTo(info.end) > 0) {
+          continue;
+        }
+      }
+      days += 1;
+      present += day.countOf(AttendanceStatus.present);
+      late += day.countOf(AttendanceStatus.late);
+      absent += day.countOf(AttendanceStatus.absent);
+      excused += day.countOf(AttendanceStatus.excused);
+    }
+    return AttendanceSummary(
+      days: days,
+      present: present,
+      late: late,
+      absent: absent,
+      excused: excused,
+    );
   }
 
   /* ----------------------------------- BMI ---------------------------------- */
@@ -552,12 +799,32 @@ class AppState extends ChangeNotifier {
 
   /* -------------------------------- selectors -------------------------------- */
 
-  List<Student> studentsOf(String? sectionId) {
+  List<Student> studentsOf(String? sectionId, {bool includeArchived = false}) {
     if (sectionId == null) return const [];
-    final list = students.values.where((s) => s.sectionId == sectionId).toList()
+    final list = students.values
+        .where((s) => s.sectionId == sectionId &&
+            (includeArchived || !s.archived))
+        .toList()
       ..sort((a, b) => a.seatNumber.compareTo(b.seatNumber));
     return list;
   }
+
+  /// Classes for the active school year (archived ones excluded by default).
+  List<Section> classesOf(String? schoolYear, {bool includeArchived = false}) {
+    final year = schoolYear ?? activeSchoolYear;
+    final list = sections.values
+        .where((s) =>
+            (year == null || s.schoolYear == year) &&
+            (includeArchived || !s.archived))
+        .toList()
+      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    return list;
+  }
+
+  List<Section> archivedClasses() => sections.values
+      .where((section) => section.archived)
+      .toList()
+    ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
   List<Subject> subjectsOf(String? sectionId) {
     if (sectionId == null) return const [];
@@ -566,11 +833,22 @@ class AppState extends ChangeNotifier {
     return list;
   }
 
+  /// Subjects of a class that are offered in [term].
+  List<Subject> subjectsInTerm(String? sectionId, int term) =>
+      subjectsOf(sectionId).where((subject) => subject.covers(term)).toList();
+
   Section? section(String? id) => id == null ? null : sections[id];
 
   Student? student(String? id) => id == null ? null : students[id];
 
   Subject? subject(String? id) => id == null ? null : subjects[id];
+
+  GradingConfig? config(String? id) => id == null ? null : gradingConfigs[id];
+
+  List<GradingConfig> configsFor(Curriculum curriculum) => gradingConfigs.values
+      .where((config) => config.curriculum == curriculum)
+      .toList()
+    ..sort((a, b) => a.name.compareTo(b.name));
 
   /// Latest BMI record for a student (most recent first).
   BmiRecord? latestBmi(String studentId) {
@@ -579,7 +857,8 @@ class AppState extends ChangeNotifier {
       if (record.studentId != studentId) continue;
       if (best == null ||
           record.recordedAt > best.recordedAt ||
-          (record.recordedAt == best.recordedAt && record.date.compareTo(best.date) > 0)) {
+          (record.recordedAt == best.recordedAt &&
+              record.date.compareTo(best.date) > 0)) {
         best = record;
       }
     }
@@ -596,7 +875,14 @@ class AppState extends ChangeNotifier {
     return list;
   }
 
-  /// Full CSV snapshot for exports.
+  /// Total learners across the active school year.
+  int get totalStudents => students.values
+      .where((student) => !student.archived && sections[student.sectionId] != null)
+      .length;
+
+  int get totalClasses => classesOf(activeSchoolYear).length;
+
+  /// Full snapshot for exports.
   BackupData backupData() => BackupData(
         teacherName: teacherName,
         sections: sections,
@@ -606,7 +892,44 @@ class AppState extends ChangeNotifier {
         scores: scores,
         attendance: attendance,
         bmi: bmi,
+        activeSchoolYear: activeSchoolYear,
+        activeTerm: activeTerm,
       );
+
+  /* --------------------------------- backup --------------------------------- */
+
+  /// Writes a copy of the SQLite database to [destination].
+  Future<File> backupDatabase(String destination) =>
+      _db.backupTo(destination);
+
+  /// Restores [source] over the live database and reloads the store.
+  Future<void> restoreDatabase(String source) async {
+    await _db.restoreFrom(source);
+    await load();
+  }
+
+  Future<String> databasePath() => _db.databaseFilePath;
+}
+
+class AttendanceSummary {
+  const AttendanceSummary({
+    required this.days,
+    required this.present,
+    required this.late,
+    required this.absent,
+    required this.excused,
+  });
+
+  final int days;
+  final int present;
+  final int late;
+  final int absent;
+  final int excused;
+
+  int get total => present + late + absent + excused;
+
+  /// Share of marks that count as present (present + late).
+  double get attendanceRate => total == 0 ? 0 : (present + late) / total * 100;
 }
 
 int mathMax(int a, int b) => a > b ? a : b;

@@ -1,4 +1,4 @@
-/// Add or edit a subject: name, teacher, grading weights, transmutation.
+/// Add or edit a subject: name, term span, grading weights, transmutation.
 library;
 
 import 'package:flutter/material.dart';
@@ -23,9 +23,23 @@ class SubjectFormScreen extends StatefulWidget {
 
 class _SubjectFormScreenState extends State<SubjectFormScreen> {
   late final TextEditingController _name;
-  Weights _weights = Map<ComponentKey, double>.from(defaultWeights);
-  bool _transmute = false;
+  Weights _weights = Map<AssessmentCategory, double>.from(depedAcademicWeights);
+  bool _transmute = true;
+  int _termStart = 1;
+  int _termEnd = 3;
+  String _configId = '';
   String _error = '';
+
+  /// Contiguous term spans offered to the teacher, including single-term
+  /// electives and whole-year subjects.
+  static const List<(int, int)> _spans = [
+    (1, 1),
+    (2, 2),
+    (3, 3),
+    (1, 2),
+    (2, 3),
+    (1, 3),
+  ];
 
   @override
   void initState() {
@@ -34,8 +48,11 @@ class _SubjectFormScreenState extends State<SubjectFormScreen> {
     final existing = _existing();
     if (existing != null) {
       _name.text = existing.name;
-      _weights = Map<ComponentKey, double>.from(existing.weights);
+      _weights = Map<AssessmentCategory, double>.from(existing.weights);
       _transmute = existing.transmute;
+      _termStart = existing.termStart;
+      _termEnd = existing.termEnd;
+      _configId = existing.configId;
     }
   }
 
@@ -51,8 +68,17 @@ class _SubjectFormScreenState extends State<SubjectFormScreen> {
     return context.read<AppState>().subjects[id];
   }
 
-  int get _total => ComponentKey.values.fold<int>(
-      0, (sum, key) => sum + (_weights[key] ?? 0).round());
+  double get _total =>
+      _weights.values.fold<double>(0, (sum, value) => sum + value);
+
+  void _applyPreset(GradingConfig config) {
+    setState(() {
+      _weights = Map<AssessmentCategory, double>.from(config.weights);
+      _transmute = config.transmute;
+      _configId = config.id;
+      _error = '';
+    });
+  }
 
   void _onSave() {
     final state = context.read<AppState>();
@@ -60,10 +86,9 @@ class _SubjectFormScreenState extends State<SubjectFormScreen> {
       setState(() => _error = 'Please enter the subject name.');
       return;
     }
-    if (_total != 100) {
-      setState(
-        () => _error = 'Weights must add up to 100%. Current total: $_total%.',
-      );
+    final weightError = validateWeights(_weights);
+    if (weightError != null) {
+      setState(() => _error = weightError);
       return;
     }
     final subjectId = widget.subjectId;
@@ -73,6 +98,9 @@ class _SubjectFormScreenState extends State<SubjectFormScreen> {
         name: _name.text.trim(),
         weights: _weights,
         transmute: _transmute,
+        termStart: _termStart,
+        termEnd: _termEnd,
+        configId: _configId,
       );
     } else {
       state.addSubject(
@@ -81,6 +109,9 @@ class _SubjectFormScreenState extends State<SubjectFormScreen> {
         teacherName: state.teacherName,
         weights: _weights,
         transmute: _transmute,
+        termStart: _termStart,
+        termEnd: _termEnd,
+        configId: _configId,
       );
     }
     Navigator.of(context).maybePop();
@@ -94,8 +125,9 @@ class _SubjectFormScreenState extends State<SubjectFormScreen> {
       builder: (dialogContext) => AlertDialog(
         title: const Text('Delete subject?'),
         content: const Text(
-          'This removes the subject with all its recorded scores '
-          'and computed grades.',
+          'This removes the subject with all its recorded assessments, scores '
+          'and computed grades. Archive the class instead if you only want to '
+          'stop teaching it.',
         ),
         actions: [
           AppButton(
@@ -120,20 +152,19 @@ class _SubjectFormScreenState extends State<SubjectFormScreen> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final existing = widget.subjectId == null
-        ? null
-        : state.subjects[widget.subjectId];
+    final existing =
+        widget.subjectId == null ? null : state.subjects[widget.subjectId];
     final sectionId = existing?.sectionId ?? widget.sectionId ?? '';
     final section = state.sections[sectionId];
+    final curriculum = section?.curriculum ?? Curriculum.existingShs;
+    final configs = state.configsFor(curriculum);
 
     return Screen(
       child: Column(
         children: [
           PageHeader(
             title: existing == null ? 'New Subject' : 'Edit Subject',
-            subtitle: section == null
-                ? null
-                : '${section.gradeLevel} — ${section.section}',
+            subtitle: section?.title,
             onBack: () => Navigator.of(context).maybePop(),
           ),
           Expanded(
@@ -143,52 +174,89 @@ class _SubjectFormScreenState extends State<SubjectFormScreen> {
                 Field(
                   label: 'Subject Name',
                   icon: Ionicons.book,
-                  placeholder: 'e.g. Mathematics',
+                  placeholder: 'e.g. General Mathematics',
                   controller: _name,
                   keyboardType: TextInputType.name,
+                  maxLength: 60,
                   onChanged: (_) => setState(() => _error = ''),
                 ),
-                const SizedBox(height: 14),
-                const _Label('Grading Weights'),
+                const _Label('Terms Offered'),
+                const SizedBox(height: 4),
+                const Text(
+                  'Subjects that run for part of the year keep their own records '
+                  'per term; changing the term never deletes anything.',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: AppColors.textFaint,
+                    height: 1.4,
+                  ),
+                ),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
                   children: [
-                    for (final preset in weightPresets)
+                    for (final span in _spans)
+                      AppChip(
+                        label: span.$1 == span.$2
+                            ? termLabel(span.$1)
+                            : (span.$1 == 1 && span.$2 == 3
+                                ? 'Whole year'
+                                : 'Terms ${span.$1}–${span.$2}'),
+                        active: _termStart == span.$1 && _termEnd == span.$2,
+                        onTap: () => setState(() {
+                          _termStart = span.$1;
+                          _termEnd = span.$2;
+                        }),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                const _Label('Grading Configuration'),
+                const SizedBox(height: 4),
+                Text(
+                  '${curriculum.label} weights. Pick a DepEd preset or set your '
+                  'own WW / PT / TE percentages.',
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    color: AppColors.textFaint,
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final config in configs)
                       Builder(builder: (context) {
-                        final active = ComponentKey.values
-                            .every((c) => preset.weights[c] == _weights[c]);
+                        final active = AssessmentCategory.values.every(
+                          (category) =>
+                              config.weights[category] == _weights[category],
+                        );
                         return InkWell(
-                          borderRadius:
-                              BorderRadius.circular(AppRadius.pill),
-                          onTap: () => setState(
-                            () =>
-                                _weights = Map<ComponentKey, double>.from(preset.weights),
-                          ),
+                          borderRadius: BorderRadius.circular(AppRadius.pill),
+                          onTap: () => _applyPreset(config),
                           child: Container(
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 9),
+                              horizontal: 12,
+                              vertical: 9,
+                            ),
                             decoration: BoxDecoration(
-                              color:
-                                  active ? AppColors.navy : AppColors.white,
+                              color: active ? AppColors.navy : AppColors.white,
                               border: Border.all(
-                                color: active
-                                    ? AppColors.navy
-                                    : AppColors.border,
+                                color: active ? AppColors.navy : AppColors.border,
                                 width: 1.5,
                               ),
-                              borderRadius:
-                                  BorderRadius.circular(AppRadius.pill),
+                              borderRadius: BorderRadius.circular(AppRadius.pill),
                             ),
                             child: Text(
-                              preset.label,
+                              config.name,
                               style: TextStyle(
+                                fontFamily: 'Poppins',
                                 fontSize: 12,
                                 fontWeight: AppFonts.semibold,
-                                color: active
-                                    ? AppColors.white
-                                    : AppColors.text,
+                                color: active ? AppColors.white : AppColors.text,
                               ),
                             ),
                           ),
@@ -201,38 +269,54 @@ class _SubjectFormScreenState extends State<SubjectFormScreen> {
                   style: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
                   child: Column(
                     children: [
-                      for (final (index, key)
-                          in ComponentKey.values.indexed) ...[
-                        if (index > 0) const Divider(height: 1, color: AppColors.bg),
+                      for (final (index, category)
+                          in AssessmentCategory.values.indexed) ...[
+                        if (index > 0)
+                          const Divider(height: 1, color: AppColors.bg),
                         Padding(
                           padding: const EdgeInsets.symmetric(vertical: 9),
                           child: Row(
                             children: [
                               Expanded(
-                                child: Text(
-                                  key.label,
-                                  style: const TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: AppFonts.semibold,
-                                    color: AppColors.navyDark,
-                                  ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      category.label,
+                                      style: const TextStyle(
+                                        fontFamily: 'Poppins',
+                                        fontSize: 14,
+                                        fontWeight: AppFonts.semibold,
+                                        color: AppColors.navyDark,
+                                      ),
+                                    ),
+                                    Text(
+                                      '${category.short} weight',
+                                      style: const TextStyle(
+                                        fontSize: 10.5,
+                                        color: AppColors.textFaint,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                               _StepButton(
                                 label: '−',
-                                onTap: () => setState(
-                                  () => _weights[key] =
-                                      ((_weights[key] ?? 0) - 5)
+                                onTap: () => setState(() {
+                                  _weights[category] =
+                                      ((_weights[category] ?? 0) - 5)
                                           .clamp(0, 100)
-                                          .toDouble(),
-                                ),
+                                          .toDouble();
+                                  _configId = '';
+                                }),
                               ),
                               SizedBox(
                                 width: 56,
                                 child: Text(
-                                  '${(_weights[key] ?? 0).round()}%',
+                                  '${(_weights[category] ?? 0).round()}%',
                                   textAlign: TextAlign.center,
                                   style: const TextStyle(
+                                    fontFamily: 'Poppins',
                                     fontSize: 14.5,
                                     fontWeight: AppFonts.bold,
                                     color: AppColors.navyDark,
@@ -241,12 +325,13 @@ class _SubjectFormScreenState extends State<SubjectFormScreen> {
                               ),
                               _StepButton(
                                 label: '+',
-                                onTap: () => setState(
-                                  () => _weights[key] =
-                                      ((_weights[key] ?? 0) + 5)
+                                onTap: () => setState(() {
+                                  _weights[category] =
+                                      ((_weights[category] ?? 0) + 5)
                                           .clamp(0, 100)
-                                          .toDouble(),
-                                ),
+                                          .toDouble();
+                                  _configId = '';
+                                }),
                               ),
                             ],
                           ),
@@ -261,14 +346,16 @@ class _SubjectFormScreenState extends State<SubjectFormScreen> {
                             const Text(
                               'Total',
                               style: TextStyle(
+                                fontFamily: 'Poppins',
                                 fontSize: 14,
                                 fontWeight: AppFonts.bold,
                                 color: AppColors.navyDark,
                               ),
                             ),
                             Text(
-                              '$_total%',
+                              '${_total.round()}%',
                               style: TextStyle(
+                                fontFamily: 'Poppins',
                                 fontSize: 14.5,
                                 fontWeight: AppFonts.bold,
                                 color: _total == 100
@@ -293,6 +380,7 @@ class _SubjectFormScreenState extends State<SubjectFormScreen> {
                             Text(
                               'DepEd Transmutation',
                               style: TextStyle(
+                                fontFamily: 'Poppins',
                                 fontSize: 14,
                                 fontWeight: AppFonts.semibold,
                                 color: AppColors.navyDark,
@@ -300,8 +388,8 @@ class _SubjectFormScreenState extends State<SubjectFormScreen> {
                             ),
                             SizedBox(height: 2),
                             Text(
-                              'Convert raw grades using the DO 8, s. 2015 '
-                              'transmutation table (60% mastery → 75).',
+                              'Converts the initial grade with the DO 8, s. 2015 '
+                              'table (60% mastery → 75).',
                               style: TextStyle(
                                 fontSize: 11.5,
                                 color: AppColors.textSoft,
@@ -316,7 +404,7 @@ class _SubjectFormScreenState extends State<SubjectFormScreen> {
                         activeThumbColor: AppColors.white,
                         activeTrackColor: AppColors.navy,
                         inactiveTrackColor: const Color(0xFFCBD8EE),
-                        onChanged: (v) => setState(() => _transmute = v),
+                        onChanged: (value) => setState(() => _transmute = value),
                       ),
                     ],
                   ),
@@ -369,6 +457,7 @@ class _Label extends StatelessWidget {
       child: Text(
         text,
         style: const TextStyle(
+          fontFamily: 'Poppins',
           fontSize: 14.5,
           fontWeight: AppFonts.semibold,
           color: AppColors.text,

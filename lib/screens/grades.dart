@@ -1,6 +1,6 @@
-/// Grade book (requirement 2): record scores for quizzes, assignments,
-/// activities, performance tasks and examinations; grades compute instantly
-/// with the subject's weights (and optional DepEd transmutation).
+/// Grade book: assessments (Written Works, Performance Tasks, Term Exam) for a
+/// subject in a term, score entry, and the automatic initial → term → final
+/// grade computation.
 library;
 
 import 'package:flutter/material.dart' hide Badge;
@@ -33,8 +33,8 @@ class GradesScreen extends StatefulWidget {
 class _GradesScreenState extends State<GradesScreen> {
   String _sectionId = '';
   String? _subjectId;
-  int _quarter = 1;
-  ComponentKey _component = ComponentKey.quizzes;
+  int _term = 1;
+  AssessmentCategory _category = AssessmentCategory.writtenWorks;
   String? _activeItemId;
 
   @override
@@ -42,41 +42,31 @@ class _GradesScreenState extends State<GradesScreen> {
     super.didChangeDependencies();
     final state = context.read<AppState>();
     if (_sectionId.isEmpty) {
-      final sorted = state.sections.values.toList()
-        ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      final classes = state.classesOf(state.activeSchoolYear);
       _sectionId = widget.sectionId ??
           state.activeSectionId ??
-          (sorted.isEmpty ? null : sorted.first.id) ??
-          '';
+          (classes.isEmpty ? '' : classes.first.id);
     }
+    _term = state.activeTerm;
     if (_subjectId == null) {
-      final subs = _subjectsOf(state);
-      _subjectId = widget.subjectId ?? (subs.isEmpty ? null : subs.first.id);
+      final subjects = state.subjectsOf(_sectionId);
+      _subjectId = widget.subjectId ?? (subjects.isEmpty ? null : subjects.first.id);
     }
   }
-
-  List<Subject> _subjectsOf(AppState state) => state.subjects.values
-      .where((s) => s.sectionId == _sectionId)
-      .toList()
-    ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
-
-  List<Student> _rosterOf(AppState state) =>
-      state.students.values.where((s) => s.sectionId == _sectionId).toList()
-        ..sort((a, b) => a.seatNumber.compareTo(b.seatNumber));
 
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final sections = state.sections.values.toList()
-      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
-    final section =
-        state.sections[_sectionId] ?? (sections.isEmpty ? null : sections.first);
+    final classes = state.classesOf(state.activeSchoolYear);
 
-    if (section == null) {
+    if (classes.isEmpty) {
       return Screen(
         child: Column(
           children: [
-            const PageHeader(title: 'Grade Book', subtitle: 'Create a class first'),
+            const PageHeader(
+              title: 'Grade Book',
+              subtitle: 'Create a class first',
+            ),
             EmptyState(
               icon: Ionicons.statsChartOutline,
               title: 'No classes yet',
@@ -91,37 +81,47 @@ class _GradesScreenState extends State<GradesScreen> {
       );
     }
 
-    final subjectList = _subjectsOf(state);
-    final subject = subjectList.where((s) => s.id == _subjectId).firstOrNull ??
-        (subjectList.isEmpty ? null : subjectList.first);
-    final roster = _rosterOf(state);
+    final section = state.sections[_sectionId] ?? classes.first;
+    final subjectList = state.subjectsOf(section.id);
+    final subject =
+        subjectList.where((value) => value.id == _subjectId).firstOrNull ??
+            (subjectList.isEmpty ? null : subjectList.first);
 
-    final sheet = subject == null
+    if (subject != null && !subject.covers(_term)) {
+      // The selected subject is not offered this term; fall back to the first
+      // subject that is, so the term view never shows an impossible subject.
+      final inTerm = subjectList.where((value) => value.covers(_term)).toList();
+      if (inTerm.isNotEmpty && !inTerm.any((value) => value.id == subject.id)) {
+        _subjectId = inTerm.first.id;
+      }
+    }
+
+    final activeSubject =
+        subjectList.where((value) => value.id == _subjectId).firstOrNull ??
+            (subjectList.isEmpty ? null : subjectList.first);
+    final roster = state.studentsOf(section.id);
+    final sheet = activeSubject == null
         ? null
-        : state.sheets[state.sheetIdOf(subject.id, _quarter)];
-    final items = sheet?.items[_component] ?? const <AssessmentItem>[];
-    final activeItem = items.where((it) => it.id == _activeItemId).firstOrNull ??
+        : state.sheetOf(activeSubject.id, _term);
+    final items = sheet?.itemsOf(_category) ?? const <AssessmentItem>[];
+    final activeItem = items.where((item) => item.id == _activeItemId).firstOrNull ??
         (items.isEmpty ? null : items.first);
 
-    final grades = subject == null
+    final grades = activeSubject == null
         ? <_GradeRow>[]
         : [
-            for (final st in roster)
+            for (final student in roster)
               _GradeRow(
-                student: st,
-                result: computeQuarterGrade(
-                  subject.weights,
-                  subject.transmute,
-                  sheet,
-                  state.scores,
-                  st.id,
-                ),
+                student: student,
+                result: state.gradeOf(activeSubject, _term, student.id),
+                finalGrade: state.finalGradeOf(activeSubject, student.id),
               ),
           ];
-    final finals =
-        grades.map((g) => g.result.finalGrade).whereType<double>().toList();
-    final classAverage =
-        finals.isEmpty ? null : finals.reduce((a, b) => a + b) / finals.length;
+    final termValues =
+        grades.map((row) => row.result.termGrade).whereType<double>().toList();
+    final classAverage = termValues.isEmpty
+        ? null
+        : termValues.reduce((a, b) => a + b) / termValues.length;
 
     return Screen(
       child: Column(
@@ -129,99 +129,150 @@ class _GradesScreenState extends State<GradesScreen> {
           PageHeader(
             title: 'Grade Book',
             subtitle:
-                '${section.gradeLevel} — ${section.section} · SY ${section.schoolYear}',
+                '${section.title} · SY ${section.schoolYear} · ${termLabel(_term)}',
             onBack: () => Navigator.of(context).maybePop(),
+            right: _RoundButton(
+              icon: Ionicons.settingsOutline,
+              onTap: activeSubject == null
+                  ? null
+                  : () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              SubjectFormScreen(subjectId: activeSubject.id),
+                        ),
+                      ),
+            ),
           ),
-          if (sections.length > 1)
+          if (classes.length > 1)
             _chipRow([
-              for (final sec in sections)
+              for (final value in classes)
                 AppChip(
-                  label:
-                      '${sec.gradeLevel.replaceFirst('Grade ', 'G')} — ${sec.section}',
-                  active: sec.id == section.id,
+                  label: value.shortTitle,
+                  active: value.id == section.id,
                   onTap: () {
                     setState(() {
-                      _sectionId = sec.id;
+                      _sectionId = value.id;
                       _subjectId = null;
                       _activeItemId = null;
                     });
-                    context.read<AppState>().setActiveSection(sec.id);
+                    context.read<AppState>().setActiveSection(value.id);
                   },
                 ),
             ]),
           if (subjectList.isEmpty)
-            EmptyState(
-              icon: Ionicons.bookOutline,
-              title: 'No subjects yet',
-              subtitle:
-                  'Add the subjects you teach for this class to start recording grades.',
-              actionLabel: 'Add Subject',
-              onAction: () => Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => SubjectFormScreen(sectionId: section.id),
+            Expanded(
+              child: EmptyState(
+                icon: Ionicons.bookOutline,
+                title: 'No subjects yet',
+                subtitle:
+                    'Add the subjects you teach for this class to start recording grades.',
+                actionLabel: 'Add Subject',
+                onAction: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => SubjectFormScreen(sectionId: section.id),
+                  ),
                 ),
               ),
             )
           else
             Expanded(
               child: ListView(
-                padding: const EdgeInsets.only(bottom: 24),
+                padding: const EdgeInsets.only(bottom: 26),
                 children: [
                   _chipRow([
-                    for (final sub in subjectList)
+                    for (final value in subjectList)
                       AppChip(
-                        label: sub.name,
-                        active: sub.id == subject?.id,
+                        label: value.covers(_term)
+                            ? value.name
+                            : '${value.name} (${value.termSpanLabel})',
+                        active: value.id == activeSubject?.id,
                         onTap: () => setState(() {
-                          _subjectId = sub.id;
+                          _subjectId = value.id;
                           _activeItemId = null;
                         }),
                       ),
                     _AddChip(
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute(
-                          builder: (_) =>
-                              SubjectFormScreen(sectionId: section.id),
+                          builder: (_) => SubjectFormScreen(sectionId: section.id),
                         ),
                       ),
                     ),
                   ]),
-                  if (subject != null) ...[
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                      child: Segmented<int>(
-                        options: [
-                          for (final q in quarters) SegmentedOption(q, 'Q$q'),
-                        ],
-                        value: _quarter,
-                        onChange: (q) => setState(() {
-                          _quarter = q;
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                    child: Segmented<int>(
+                      options: [
+                        for (final term in terms)
+                          SegmentedOption(term, termShortLabel(term)),
+                      ],
+                      value: _term,
+                      onChange: (term) {
+                        setState(() {
+                          _term = term;
                           _activeItemId = null;
-                        }),
-                      ),
+                        });
+                        context.read<AppState>().setActiveTerm(term);
+                      },
                     ),
+                  ),
+                  if (activeSubject == null)
+                    const EmptyState(
+                      icon: Ionicons.bookOutline,
+                      title: 'No subject selected',
+                      subtitle: 'Choose a subject above.',
+                    )
+                  else if (!activeSubject.covers(_term))
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                      child: AppCard(
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Ionicons.informationCircleOutline,
+                              size: 20,
+                              color: AppColors.navy,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                '${activeSubject.name} is offered in '
+                                '${activeSubject.termSpanLabel}, not in ${termLabel(_term)}. '
+                                'Scores for this term are still kept separately.',
+                                style: const TextStyle(
+                                  fontSize: 12.5,
+                                  color: AppColors.textSoft,
+                                  height: 1.45,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  else ...[
                     _WeightsNote(
-                      subject: subject,
+                      subject: activeSubject,
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute(
                           builder: (_) =>
-                              SubjectFormScreen(subjectId: subject.id),
+                              SubjectFormScreen(subjectId: activeSubject.id),
                         ),
                       ),
                     ),
                     _chipRow([
-                      for (final c in ComponentKey.values)
+                      for (final category in AssessmentCategory.values)
                         AppChip(
-                          label: c.short,
-                          active: c == _component,
+                          label: category.short,
+                          active: category == _category,
                           onTap: () => setState(() {
-                            _component = c;
+                            _category = category;
                             _activeItemId = null;
                           }),
                         ),
                     ]),
                     Padding(
-                      padding: const EdgeInsets.only(left: 16, top: 12),
+                      padding: const EdgeInsets.only(left: 16, top: 10),
                       child: SizedBox(
                         height: 38,
                         child: ListView(
@@ -239,68 +290,74 @@ class _GradesScreenState extends State<GradesScreen> {
                                 ),
                               ),
                             _AddChip(
-                              label: 'Add ${_component.short}',
+                              label: 'Add ${_category.short}',
                               onTap: () => _openItemDialog(null),
                             ),
                           ],
                         ),
                       ),
                     ),
+                    const SizedBox(height: 10),
                     if (items.isEmpty)
-                      AppCard(
-                        child: Text(
-                          'No ${_component.label.toLowerCase()} added for Q$_quarter yet. '
-                          'Tap “Add” to create the first item (e.g. “Quiz 1” out of 20).',
-                          style: const TextStyle(
-                            fontSize: 12.5,
-                            color: AppColors.textSoft,
-                            height: 1.45,
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: AppCard(
+                          child: Text(
+                            'No ${_category.label.toLowerCase()} recorded for '
+                            '${termLabel(_term)} yet. Tap “Add ${_category.short}” to '
+                            'create the first one (for example “${_category.singular} 1” '
+                            'out of 20).',
+                            style: const TextStyle(
+                              fontSize: 12.5,
+                              color: AppColors.textSoft,
+                              height: 1.45,
+                            ),
                           ),
                         ),
                       )
                     else
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
                         child: AppCard(
                           style: EdgeInsets.zero,
                           child: Column(
                             children: [
                               _TableHead(children: [
-                                const _HeadCell('Student', flex: 1),
-                                for (final it in items.take(4))
+                                const _HeadCell('Learner', flex: 1),
+                                for (final item in items.take(3))
                                   _HeadCell(
-                                    '${it.title.replaceAll(RegExp(r'\s+'), '')}\n/${fmtMax(it.max)}',
-                                    width: 44,
+                                    '${item.title.replaceAll(RegExp(r'\s+'), '')}\n/${fmtMax(item.max)}',
+                                    width: 52,
                                   ),
-                                const _HeadCell('%', width: 44),
+                                const _HeadCell('Score', width: 58),
                               ]),
-                              for (final st in roster)
+                              for (final student in roster)
                                 _ScoreRow(
-                                  student: st,
-                                  items: items,
-                                  sheetId: sheet?.id,
+                                  student: student,
+                                  items: items.take(3).toList(),
+                                  sheetId: sheet!.id,
                                   scores: state.scores,
-                                  componentPct: sheet == null
-                                      ? null
-                                      : computeQuarterGrade(
-                                          subject.weights,
-                                          subject.transmute,
-                                          sheet,
-                                          state.scores,
-                                          st.id,
-                                        ).components[_component]?.percentage,
                                   activeItemId: activeItem?.id,
                                   onTap: activeItem == null
                                       ? null
                                       : () => _openScoreDialog(
-                                            st, sheet, activeItem),
+                                            state,
+                                            activeSubject,
+                                            sheet,
+                                            student,
+                                            activeItem,
+                                          ),
                                 ),
                               Padding(
                                 padding: const EdgeInsets.symmetric(
-                                    vertical: 8, horizontal: 12),
+                                  vertical: 8,
+                                  horizontal: 12,
+                                ),
                                 child: Text(
-                                  'Tap a row to score the highlighted item'
-                                  '${items.length > 4 ? ' (showing first 4 items)' : ''}.',
+                                  activeItem == null
+                                      ? 'Add an assessment to start scoring.'
+                                      : 'Tap a learner to score “${activeItem.title}” '
+                                          '(highest ${fmtMax(activeItem.max)}).',
                                   textAlign: TextAlign.center,
                                   style: const TextStyle(
                                     fontSize: 10.5,
@@ -318,8 +375,9 @@ class _GradesScreenState extends State<GradesScreen> {
                         children: [
                           Expanded(
                             child: Text(
-                              'Quarterly Grades — Q$_quarter',
+                              'Term Grades — ${termLabel(_term)}',
                               style: const TextStyle(
+                                fontFamily: 'Poppins',
                                 fontSize: 15.5,
                                 fontWeight: AppFonts.bold,
                                 color: AppColors.navyDark,
@@ -335,52 +393,59 @@ class _GradesScreenState extends State<GradesScreen> {
                         ],
                       ),
                     ),
-                    AppCard(
-                      style: EdgeInsets.zero,
-                      child: Column(
-                        children: [
-                          const _TableHead(children: [
-                            _HeadCell('Student', flex: 1),
-                            _HeadCell('WW', width: 54),
-                            _HeadCell('PT', width: 44),
-                            _HeadCell('QA', width: 46),
-                            _HeadCell('Grade', width: 52),
-                          ]),
-                          for (final row in grades)
-                            _GradeTableRow(
-                              row: row,
-                              onTap: () => Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (_) => StudentProfileScreen(
-                                    studentId: row.student.id,
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: AppCard(
+                        style: EdgeInsets.zero,
+                        child: Column(
+                          children: [
+                            const _TableHead(children: [
+                              _HeadCell('Learner', flex: 1),
+                              _HeadCell('WW', width: 38),
+                              _HeadCell('PT', width: 38),
+                              _HeadCell('TE', width: 38),
+                              _HeadCell('Init.', width: 42),
+                              _HeadCell('Grade', width: 48),
+                            ]),
+                            for (final row in grades)
+                              _GradeTableRow(
+                                row: row,
+                                onTap: () => Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => StudentProfileScreen(
+                                      studentId: row.student.id,
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
-                          if (grades.isEmpty)
-                            const Padding(
-                              padding: EdgeInsets.all(14),
-                              child: Text(
-                                'Add students to this class to see grades.',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  fontSize: 12.5,
-                                  color: AppColors.textSoft,
+                            if (grades.isEmpty)
+                              const Padding(
+                                padding: EdgeInsets.all(14),
+                                child: Text(
+                                  'Add learners to this class to see grades.',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 12.5,
+                                    color: AppColors.textSoft,
+                                  ),
                                 ),
                               ),
-                            ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
-                    const Padding(
-                      padding: EdgeInsets.fromLTRB(16, 10, 16, 0),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
                       child: Text(
-                        'Grades are computed automatically from recorded scores '
-                        'and saved on this device.',
+                        'Grades compute automatically from the recorded scores: '
+                        'initial grade = weighted WW/PT/TE, term grade = '
+                        '${activeSubject.transmute ? 'transmuted (DO 8, s. 2015)' : 'initial grade'}, '
+                        'final grade = average of the term grades.',
                         textAlign: TextAlign.center,
-                        style: TextStyle(
+                        style: const TextStyle(
                           fontSize: 11,
                           color: AppColors.textFaint,
+                          height: 1.4,
                         ),
                       ),
                     ),
@@ -407,6 +472,9 @@ class _GradesScreenState extends State<GradesScreen> {
   /* -------------------------------- dialogs -------------------------------- */
 
   Future<void> _openItemDialog(AssessmentItem? item) async {
+    final state = context.read<AppState>();
+    final subject = state.subject(_subjectId);
+    if (subject == null) return;
     final titleController = TextEditingController(text: item?.title ?? '');
     final maxController = TextEditingController(
       text: item == null ? '' : fmtMax(item.max),
@@ -420,9 +488,10 @@ class _GradesScreenState extends State<GradesScreen> {
         ),
         title: Text(
           item == null
-              ? 'New ${_component.label.replaceFirst(RegExp(r's$'), '')}'
-              : 'Edit Item',
+              ? 'New ${_category.singular}'
+              : 'Edit ${_category.singular}',
           style: const TextStyle(
+            fontFamily: 'Poppins',
             fontSize: 17,
             fontWeight: AppFonts.bold,
             color: AppColors.navyDark,
@@ -433,6 +502,7 @@ class _GradesScreenState extends State<GradesScreen> {
           children: [
             TextField(
               controller: titleController,
+              textCapitalization: TextCapitalization.words,
               decoration: const InputDecoration(
                 hintText: 'Title (e.g. Quiz 1)',
                 border: OutlineInputBorder(
@@ -446,10 +516,18 @@ class _GradesScreenState extends State<GradesScreen> {
               keyboardType: TextInputType.number,
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
               decoration: const InputDecoration(
-                hintText: 'Highest score (e.g. 20)',
+                hintText: 'Highest possible score (e.g. 20)',
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.all(Radius.circular(AppRadius.md)),
                 ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Term $_term · ${_category.label}',
+              style: const TextStyle(
+                fontSize: 11.5,
+                color: AppColors.textFaint,
               ),
             ),
           ],
@@ -460,15 +538,7 @@ class _GradesScreenState extends State<GradesScreen> {
               label: 'Delete',
               variant: ButtonVariant.danger,
               onTap: () {
-                final subject = _currentSubject;
-                if (subject != null) {
-                  context.read<AppState>().deleteItem(
-                        subject.id,
-                        _quarter,
-                        _component,
-                        item.id,
-                      );
-                }
+                state.deleteItem(subject.id, _term, _category, item.id);
                 Navigator.of(dialogContext).pop(true);
               },
             ),
@@ -485,53 +555,30 @@ class _GradesScreenState extends State<GradesScreen> {
       ),
     );
 
-    if (!mounted) return;
-    if (saved == true && item == null) {
-      final subject = _currentSubject;
-      final title = titleController.text.trim();
-      final max = double.tryParse(maxController.text.trim()) ?? 0;
-      if (subject != null && title.isNotEmpty && max > 0) {
-        context
-            .read<AppState>()
-            .addItem(subject.id, _quarter, _component, title, max);
-      }
-    } else if (saved == true && item != null) {
-      final subject = _currentSubject;
-      final title = titleController.text.trim();
-      final max = double.tryParse(maxController.text.trim()) ?? 0;
-      if (subject != null && title.isNotEmpty && max > 0) {
-        context.read<AppState>().updateItem(
-              subject.id,
-              _quarter,
-              _component,
-              item.id,
-              title: title,
-              max: max,
-            );
-      }
+    if (!mounted || saved != true) return;
+    final title = titleController.text.trim();
+    final max = double.tryParse(maxController.text.trim()) ?? 0;
+    if (title.isEmpty || max <= 0) return;
+    if (item == null) {
+      final created = state.addItem(subject.id, _term, _category, title, max);
+      setState(() => _activeItemId = created.id);
+    } else {
+      state.updateItem(subject.id, _term, _category, item.id, title: title, max: max);
     }
   }
 
-  Subject? get _currentSubject {
-    final state = context.read<AppState>();
-    return state.subjects.values
-        .where((s) => s.sectionId == _sectionId && s.id == _subjectId)
-        .firstOrNull;
-  }
-
   Future<void> _openScoreDialog(
+    AppState state,
+    Subject subject,
+    ScoreSheet sheet,
     Student student,
-    ScoreSheet? sheet,
     AssessmentItem item,
   ) async {
-    if (sheet == null) return;
-    final state = context.read<AppState>();
-    final existing = state.scores[scoreKey(sheet.id, student.id, item.id)];
+    final key = scoreKey(sheet.id, student.id, item.id);
     final controller = TextEditingController(
-      text: existing == null ? '' : fmtMax(existing),
+      text: state.scores[key] == null ? '' : fmtMax(state.scores[key]!),
     );
-
-    await showDialog<void>(
+    final saved = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         backgroundColor: AppColors.white,
@@ -540,8 +587,10 @@ class _GradesScreenState extends State<GradesScreen> {
         ),
         title: Text(
           student.fullName,
+          maxLines: 2,
           style: const TextStyle(
-            fontSize: 17,
+            fontFamily: 'Poppins',
+            fontSize: 16,
             fontWeight: AppFonts.bold,
             color: AppColors.navyDark,
           ),
@@ -551,99 +600,135 @@ class _GradesScreenState extends State<GradesScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '${item.title} — highest score ${fmtMax(item.max)}',
-              style: const TextStyle(
-                fontSize: 13,
-                color: AppColors.textSoft,
-              ),
+              '${item.title} · highest ${fmtMax(item.max)}',
+              style: const TextStyle(fontSize: 12.5, color: AppColors.textSoft),
             ),
             const SizedBox(height: 10),
             TextField(
               controller: controller,
               autofocus: true,
-              textAlign: TextAlign.center,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              style: const TextStyle(
-                fontSize: 24,
-                fontWeight: AppFonts.bold,
-                color: AppColors.text,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+              ],
+              decoration: const InputDecoration(
+                hintText: 'Score',
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.all(Radius.circular(AppRadius.md)),
+                ),
               ),
-              decoration: const InputDecoration(hintText: '0'),
             ),
           ],
         ),
         actions: [
           AppButton(
             label: 'Clear',
-            variant: ButtonVariant.ghost,
+            variant: ButtonVariant.danger,
             onTap: () {
-              state.setScore(sheet.id, student.id, item.id, null);
-              Navigator.of(dialogContext).pop();
+              state.setScore(
+                sheet.id,
+                student.id,
+                item.id,
+                null,
+                term: _term,
+                subjectId: subject.id,
+              );
+              Navigator.of(dialogContext).pop(false);
             },
           ),
           AppButton(
-            label: 'Save Score',
-            onTap: () {
-              HapticFeedback.selectionClick();
-              final raw = controller.text.trim();
-              final value = raw.isEmpty ? null : double.tryParse(raw);
-              if (raw.isEmpty || value != null) {
-                state.setScore(sheet.id, student.id, item.id, value);
-              }
-              Navigator.of(dialogContext).pop();
-            },
+            label: 'Cancel',
+            variant: ButtonVariant.ghost,
+            onTap: () => Navigator.of(dialogContext).pop(false),
+          ),
+          AppButton(
+            label: 'Save',
+            onTap: () => Navigator.of(dialogContext).pop(true),
           ),
         ],
+      ),
+    );
+
+    if (!mounted || saved != true) return;
+    final parsed = double.tryParse(controller.text.trim());
+    if (parsed == null) return;
+    final clamped = parsed.clamp(0, item.max).toDouble();
+    state.setScore(
+      sheet.id,
+      student.id,
+      item.id,
+      clamped,
+      term: _term,
+      subjectId: subject.id,
+    );
+  }
+}
+
+/* --------------------------------- widgets -------------------------------- */
+
+class _RoundButton extends StatelessWidget {
+  const _RoundButton({required this.icon, this.onTap});
+
+  final IconData icon;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppColors.white,
+      shape: const CircleBorder(
+        side: BorderSide(color: AppColors.border, width: 1.5),
+      ),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onTap,
+        child: SizedBox(
+          width: 40,
+          height: 40,
+          child: Icon(icon, size: 20, color: AppColors.navy),
+        ),
       ),
     );
   }
 }
 
-/* --------------------------------- models ---------------------------------- */
-
-class _GradeRow {
-  const _GradeRow({required this.student, required this.result});
-  final Student student;
-  final QuarterGradeResult result;
-}
-
-/* ------------------------------ small parts -------------------------------- */
-
 class _AddChip extends StatelessWidget {
-  const _AddChip({required this.onTap, this.label = '+'});
+  const _AddChip({required this.onTap, this.label = 'Add'});
+
   final VoidCallback onTap;
   final String label;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(AppRadius.md),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: AppColors.ice,
-            border: Border.all(color: AppColors.blue, width: 1.5),
-            borderRadius: BorderRadius.circular(AppRadius.md),
-          ),
-          child: Row(
-            children: [
-              const Icon(Ionicons.add, size: 15, color: AppColors.navy),
-              if (label != '+') ...[
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(AppRadius.pill),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: AppColors.ice,
+              borderRadius: BorderRadius.circular(AppRadius.pill),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Ionicons.add, size: 15, color: AppColors.navy),
                 const SizedBox(width: 4),
                 Text(
                   label,
                   style: const TextStyle(
-                    fontSize: 12,
+                    fontFamily: 'Poppins',
+                    fontSize: 12.5,
                     fontWeight: AppFonts.semibold,
                     color: AppColors.navy,
                   ),
                 ),
               ],
-            ],
+            ),
           ),
         ),
       ),
@@ -656,36 +741,40 @@ class _ItemChip extends StatelessWidget {
     required this.label,
     required this.active,
     required this.onTap,
-    required this.onLongPress,
+    this.onLongPress,
   });
 
   final String label;
   final bool active;
   final VoidCallback onTap;
-  final VoidCallback onLongPress;
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      onLongPress: onLongPress,
-      borderRadius: BorderRadius.circular(AppRadius.md),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: active ? AppColors.blue : AppColors.white,
-          border: Border.all(
-            color: active ? AppColors.blue : AppColors.border,
-            width: 1.5,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        onLongPress: onLongPress,
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: active ? AppColors.navy : AppColors.white,
+            borderRadius: BorderRadius.circular(AppRadius.pill),
+            border: Border.all(
+              color: active ? AppColors.navy : AppColors.border,
+              width: 1.5,
+            ),
           ),
-          borderRadius: BorderRadius.circular(AppRadius.md),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: AppFonts.semibold,
-            color: active ? AppColors.white : AppColors.text,
+          child: Text(
+            label,
+            style: TextStyle(
+              fontFamily: 'Poppins',
+              fontSize: 12.5,
+              fontWeight: AppFonts.semibold,
+              color: active ? AppColors.white : AppColors.text,
+            ),
           ),
         ),
       ),
@@ -693,42 +782,125 @@ class _ItemChip extends StatelessWidget {
   }
 }
 
-class _WeightsNote extends StatelessWidget {
-  const _WeightsNote({required this.subject, required this.onTap});
-  final Subject subject;
-  final VoidCallback onTap;
+class _TableHead extends StatelessWidget {
+  const _TableHead({required this.children});
+
+  final List<Widget> children;
 
   @override
   Widget build(BuildContext context) {
-    String pct(ComponentKey key) => '${(subject.weights[key] ?? 0).round()}%';
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+    return Container(
+      color: AppColors.ice,
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+      child: Row(children: children),
+    );
+  }
+}
+
+class _HeadCell extends StatelessWidget {
+  const _HeadCell(this.label, {this.width, this.flex});
+
+  final String label;
+  final double? width;
+  final int? flex;
+
+  @override
+  Widget build(BuildContext context) {
+    final child = Text(
+      label,
+      textAlign: width == null ? TextAlign.left : TextAlign.center,
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+      style: const TextStyle(
+        fontFamily: 'Poppins',
+        fontSize: 10.5,
+        fontWeight: AppFonts.semibold,
+        color: AppColors.navy,
+        height: 1.2,
+      ),
+    );
+    if (flex != null) return Expanded(flex: flex!, child: child);
+    return SizedBox(width: width, child: child);
+  }
+}
+
+class _ScoreRow extends StatelessWidget {
+  const _ScoreRow({
+    required this.student,
+    required this.items,
+    required this.sheetId,
+    required this.scores,
+    required this.activeItemId,
+    this.onTap,
+  });
+
+  final Student student;
+  final List<AssessmentItem> items;
+  final String sheetId;
+  final ScoreMap scores;
+  final String? activeItemId;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(AppRadius.pill),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: AppColors.ice,
-            borderRadius: BorderRadius.circular(AppRadius.pill),
-          ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
           child: Row(
             children: [
-              const Icon(Ionicons.optionsOutline,
-                  size: 15, color: AppColors.textSoft),
-              const SizedBox(width: 6),
               Expanded(
                 child: Text(
-                  'Weights: Quiz ${pct(ComponentKey.quizzes)} · '
-                  'Assign ${pct(ComponentKey.assignments)} · '
-                  'Act ${pct(ComponentKey.activities)} · '
-                  'PT ${pct(ComponentKey.performanceTasks)} · '
-                  'Exam ${pct(ComponentKey.examinations)}'
-                  '${subject.transmute ? ' · transmuted' : ''} — tap to edit',
+                  student.fullName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                    fontSize: 11,
+                    fontFamily: 'Poppins',
+                    fontSize: 12.5,
                     fontWeight: AppFonts.medium,
-                    color: AppColors.textSoft,
+                    color: AppColors.text,
+                  ),
+                ),
+              ),
+              for (final item in items)
+                SizedBox(
+                  width: 52,
+                  child: Text(
+                    scores[scoreKey(sheetId, student.id, item.id)] == null
+                        ? '—'
+                        : fmtMax(scores[scoreKey(sheetId, student.id, item.id)]!),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontFamily: 'Poppins',
+                      fontSize: 12.5,
+                      fontWeight: item.id == activeItemId
+                          ? AppFonts.bold
+                          : AppFonts.medium,
+                      color: item.id == activeItemId
+                          ? AppColors.navy
+                          : AppColors.text,
+                    ),
+                  ),
+                ),
+              SizedBox(
+                width: 58,
+                child: Text(
+                  activeItemId == null
+                      ? '—'
+                      : (scores[scoreKey(sheetId, student.id, activeItemId!)] ==
+                              null
+                          ? '—'
+                          : fmtMax(
+                              scores[scoreKey(sheetId, student.id, activeItemId!)]!,
+                            )),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontFamily: 'Poppins',
+                    fontSize: 12.5,
+                    fontWeight: AppFonts.bold,
+                    color: AppColors.navy,
                   ),
                 ),
               ),
@@ -740,256 +912,181 @@ class _WeightsNote extends StatelessWidget {
   }
 }
 
-class _TableHead extends StatelessWidget {
-  const _TableHead({required this.children});
-  final List<Widget> children;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 12),
-      color: AppColors.ice,
-      child: Row(children: children),
-    );
-  }
-}
-
-class _HeadCell extends StatelessWidget {
-  const _HeadCell(this.label, {this.flex = 0, this.width});
-  final String label;
-  final int flex;
-  final double? width;
-
-  @override
-  Widget build(BuildContext context) {
-    final text = Text(
-      label,
-      textAlign: TextAlign.center,
-      maxLines: 2,
-      overflow: TextOverflow.ellipsis,
-      style: TextStyle(
-        fontSize: label.length > 6 ? 10 : 11.5,
-        fontWeight: AppFonts.bold,
-        color: AppColors.navyDark,
-      ),
-    );
-    if (width != null) {
-      return SizedBox(width: width, child: text);
-    }
-    return Expanded(
-      child: Align(alignment: Alignment.centerLeft, child: text),
-    );
-  }
-}
-
-/// One score-table row: name + the first four items + the component total.
-class _ScoreRow extends StatelessWidget {
-  const _ScoreRow({
+class _GradeRow {
+  const _GradeRow({
     required this.student,
-    required this.items,
-    required this.sheetId,
-    required this.scores,
-    required this.componentPct,
-    required this.activeItemId,
-    required this.onTap,
+    required this.result,
+    required this.finalGrade,
   });
 
   final Student student;
-  final List<AssessmentItem> items;
-  final String? sheetId;
-  final ScoreMap scores;
-  final double? componentPct;
-  final String? activeItemId;
+  final TermGradeResult result;
+  final double? finalGrade;
+}
+
+class _GradeTableRow extends StatelessWidget {
+  const _GradeTableRow({required this.row, this.onTap});
+
+  final _GradeRow row;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    final lastName =
-        student.fullName.split(' ').isEmpty ? student.fullName : student.fullName.split(' ').last;
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 12),
-        decoration: const BoxDecoration(
-          border: Border(
-            bottom: BorderSide(color: AppColors.bg),
+    String pct(AssessmentCategory category) {
+      final value = row.result.components[category]?.percentage;
+      return value == null ? '—' : value.toStringAsFixed(1);
+    }
+
+    final grade = row.result.displayGrade;
+    final passed = grade == null ? null : grade >= passingGrade;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+          decoration: const BoxDecoration(
+            border: Border(bottom: BorderSide(color: AppColors.border)),
           ),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              flex: 1,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '${student.seatNumber}. $lastName',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 12.5,
-                      fontWeight: AppFonts.semibold,
-                      color: AppColors.navyDark,
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      row.student.fullName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontFamily: 'Poppins',
+                        fontSize: 12.5,
+                        fontWeight: AppFonts.medium,
+                        color: AppColors.text,
+                      ),
                     ),
-                  ),
-                  Text(
-                    student.fullName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 10,
-                      color: AppColors.textFaint,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            for (final item in items.take(4))
-              SizedBox(
-                width: 40,
-                child: Builder(builder: (context) {
-                  final value =
-                      sheetId == null ? null : scores[scoreKey(sheetId!, student.id, item.id)];
-                  final isActive = activeItemId == item.id;
-                  return Text(
-                    value == null ? '–' : fmtMax(value),
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      fontWeight: AppFonts.medium,
-                      color: isActive ? AppColors.blue : AppColors.text,
-                      decoration:
-                          isActive ? TextDecoration.underline : TextDecoration.none,
-                    ),
-                  );
-                }),
-              ),
-            SizedBox(
-              width: 44,
-              child: Text(
-                componentPct == null
-                    ? '–'
-                    : componentPct!.toStringAsFixed(0),
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: AppFonts.bold,
-                  color: AppColors.navyDark,
+                    if (row.finalGrade != null)
+                      Text(
+                        'Final ${reportGrade(row.finalGrade!)}',
+                        style: const TextStyle(
+                          fontFamily: 'Poppins',
+                          fontSize: 10.5,
+                          color: AppColors.textFaint,
+                        ),
+                      ),
+                  ],
                 ),
               ),
-            ),
-          ],
+              SizedBox(
+                width: 38,
+                child: _Cell(pct(AssessmentCategory.writtenWorks)),
+              ),
+              SizedBox(
+                width: 38,
+                child: _Cell(pct(AssessmentCategory.performanceTasks)),
+              ),
+              SizedBox(width: 38, child: _Cell(pct(AssessmentCategory.termExam))),
+              SizedBox(
+                width: 42,
+                child: _Cell(
+                  row.result.initialGrade == null
+                      ? '—'
+                      : row.result.initialGrade!.toStringAsFixed(1),
+                  faint: true,
+                ),
+              ),
+              SizedBox(
+                width: 48,
+                child: Text(
+                  grade == null ? '—' : '$grade',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontFamily: 'Poppins',
+                    fontSize: 13,
+                    fontWeight: AppFonts.bold,
+                    color: passed == null
+                        ? AppColors.textFaint
+                        : (passed ? AppColors.navy : AppColors.red),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-/// One computed-grade row: WW / PT / QA / final grade.
-class _GradeTableRow extends StatelessWidget {
-  const _GradeTableRow({required this.row, required this.onTap});
+class _Cell extends StatelessWidget {
+  const _Cell(this.text, {this.faint = false});
 
-  final _GradeRow row;
+  final String text;
+  final bool faint;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      textAlign: TextAlign.center,
+      style: TextStyle(
+        fontFamily: 'Poppins',
+        fontSize: 12,
+        color: faint ? AppColors.textFaint : AppColors.text,
+      ),
+    );
+  }
+}
+
+class _WeightsNote extends StatelessWidget {
+  const _WeightsNote({required this.subject, required this.onTap});
+
+  final Subject subject;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final components = row.result.components;
-    List<double> percentages(List<ComponentKey> keys) => [
-          for (final key in keys)
-            if (components[key]?.percentage != null) components[key]!.percentage!,
-        ];
-
-    final wwList = percentages([
-      ComponentKey.quizzes,
-      ComponentKey.assignments,
-      ComponentKey.activities,
-    ]);
-    final wwPct = wwList.isEmpty
-        ? null
-        : wwList.reduce((a, b) => a + b) / wwList.length;
-    final ptPct = components[ComponentKey.performanceTasks]?.percentage;
-    final qaPct = components[ComponentKey.examinations]?.percentage;
-    final remarks = gradeRemarks(row.result.finalGrade);
-    final lastName = row.student.fullName.split(' ').last;
-    final finalGrade = row.result.finalGrade;
-
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 12),
-        decoration: const BoxDecoration(
-          border: Border(bottom: BorderSide(color: AppColors.bg)),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              flex: 1,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '${row.student.seatNumber}. $lastName',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(AppRadius.lg),
+          child: AppCard(
+            style: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                const Icon(Ionicons.calculatorOutline,
+                    size: 18, color: AppColors.navy),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    [
+                      for (final category in AssessmentCategory.values)
+                        '${category.short} ${(subject.weights[category] ?? 0).round()}%',
+                    ].join(' · '),
                     style: const TextStyle(
-                      fontSize: 12.5,
+                      fontFamily: 'Poppins',
+                      fontSize: 12,
                       fontWeight: AppFonts.semibold,
-                      color: AppColors.navyDark,
+                      color: AppColors.text,
                     ),
                   ),
-                  Text(
-                    remarks.isNotEmpty
-                        ? remarks
-                        : achievementLabel(row.result.finalGrade),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: remarks.isNotEmpty ? 9.5 : 10,
-                      fontWeight: remarks.isNotEmpty
-                          ? AppFonts.semibold
-                          : AppFonts.regular,
-                      color: remarks.isNotEmpty
-                          ? AppColors.green
-                          : AppColors.textFaint,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            _pctCell(wwPct, 54),
-            _pctCell(ptPct, 44),
-            _pctCell(qaPct, 46),
-            SizedBox(
-              width: 52,
-              child: Text(
-                finalGrade == null ? '–' : finalGrade.toStringAsFixed(1),
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: AppFonts.bold,
-                  color: finalGrade != null && finalGrade < passingGrade
-                      ? AppColors.red
-                      : AppColors.navyDark,
                 ),
-              ),
+                Text(
+                  subject.termSpanLabel,
+                  style: const TextStyle(
+                    fontFamily: 'Poppins',
+                    fontSize: 11,
+                    color: AppColors.textFaint,
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
   }
-
-  Widget _pctCell(double? value, double width) => SizedBox(
-        width: width,
-        child: Text(
-          value == null ? '–' : value.toStringAsFixed(0),
-          textAlign: TextAlign.center,
-          style: const TextStyle(
-            fontSize: 12.5,
-            fontWeight: AppFonts.medium,
-            color: AppColors.text,
-          ),
-        ),
-      );
 }

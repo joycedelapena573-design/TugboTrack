@@ -1,5 +1,5 @@
-/// Class record reports (requirements 4.2–4.3): formal PDF sheets that can be
-/// printed or saved, plus the spreadsheet-ready class record CSV (4.4).
+/// Formal PDF reports: class records, term grade sheets, final grades,
+/// learner rosters and attendance summaries — printable or shareable.
 library;
 
 import 'dart:typed_data';
@@ -8,526 +8,572 @@ import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
-import 'package:share_plus/share_plus.dart';
 
 import '../models/models.dart';
-import '../services/backup.dart';
-import '../services/grading.dart';
+import 'backup.dart';
+import 'grading.dart';
 
 const _navy = PdfColor.fromInt(0xFF0A3A8C);
 const _ink = PdfColor.fromInt(0xFF0B2E6E);
 const _soft = PdfColor.fromInt(0xFF5A6E96);
 const _head = PdfColor.fromInt(0xFFEAF2FD);
-const _totalBg = PdfColor.fromInt(0xFFF4F8FF);
+const _alt = PdfColor.fromInt(0xFFF7FAFF);
 
-String _fmt(double? value, [int digits = 2]) =>
+String _num(double? value, [int digits = 2]) =>
     value == null || value.isNaN ? '—' : value.toStringAsFixed(digits);
 
-List<Student> _studentsOfSection(BackupData data, String sectionId) =>
-    data.students.values.where((s) => s.sectionId == sectionId).toList()
-      ..sort((a, b) => a.seatNumber.compareTo(b.seatNumber));
+String _grade(double? value) => value == null ? '—' : '${reportGrade(value)}';
 
-/// One student's row for a subject + quarter, shared by PDF and CSV.
-class _Row {
-  _Row(this.student, this.pcts, this.finalGrade);
-
-  final Student student;
-
-  /// Percentage earned per component (null when nothing recorded).
-  final Map<ComponentKey, double?> pcts;
-  final double? finalGrade;
-}
-
-List<_Row> _rowsFor(BackupData data, Subject subject, int quarter) {
-  final sheet = data.sheets['${subject.id}::q$quarter'];
-  return [
-    for (final student in _studentsOfSection(data, subject.sectionId))
-      _Row(
-        student,
-        {
-          for (final key in ComponentKey.values)
-            key: sheet == null
-                ? null
-                : computeComponent(sheet, data.scores, student.id, key)
-                    .percentage,
-        },
-        sheet == null
-            ? null
-            : computeQuarterGrade(
-                subject.weights,
-                subject.transmute,
-                sheet,
-                data.scores,
-                student.id,
-              ).finalGrade,
-      ),
-  ];
-}
-
-double? _average(List<double?> values) {
-  final usable = values.whereType<double>().toList();
-  if (usable.isEmpty) return null;
-  return usable.reduce((a, b) => a + b) / usable.length;
-}
-
-double? _wwOf(Map<ComponentKey, double?> pcts) => _average([
-      pcts[ComponentKey.quizzes],
-      pcts[ComponentKey.assignments],
-      pcts[ComponentKey.activities],
-    ]);
-
-/* --------------------------------- PDF ------------------------------------ */
-
-pw.Widget _heading(String title, String subtitle) => pw.Column(
-      crossAxisAlignment: pw.CrossAxisAlignment.center,
-      children: [
-        pw.Text(
-          title,
-          style: pw.TextStyle(
-            fontSize: 16,
-            fontWeight: pw.FontWeight.bold,
-            color: _ink,
-          ),
-        ),
-        pw.SizedBox(height: 2),
-        pw.Text(
-          subtitle,
-          style: const pw.TextStyle(fontSize: 11, color: _soft),
-        ),
-        pw.SizedBox(height: 10),
-      ],
-    );
-
-pw.Widget _metaRow(String label, String value, {String? label2, String? value2}) {
-  pw.Widget cell(String text, {bool bold = false, bool labelCell = false}) =>
-      pw.Expanded(
-        child: pw.Padding(
-          padding: const pw.EdgeInsets.symmetric(vertical: 2),
-          child: pw.Text(
-            text,
-            style: pw.TextStyle(
-              fontSize: 10,
-              color: labelCell ? _soft : _ink,
-              fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal,
-            ),
-          ),
-        ),
-      );
-
-  return pw.Row(
+pw.Widget _header(String title, List<(String, String)> meta) {
+  return pw.Column(
     crossAxisAlignment: pw.CrossAxisAlignment.start,
     children: [
-      pw.SizedBox(width: 78, child: cell(label, labelCell: true)),
-      cell(value, bold: true),
-      if (label2 != null) pw.SizedBox(width: 70, child: cell(label2, labelCell: true)),
-      if (value2 != null) cell(value2, bold: true),
+      pw.Row(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Expanded(
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Text(
+                  'TUGHO INTEGRATED SCHOOL',
+                  style: pw.TextStyle(
+                    fontSize: 13,
+                    fontWeight: pw.FontWeight.bold,
+                    color: _navy,
+                    letterSpacing: 1.1,
+                  ),
+                ),
+                pw.SizedBox(height: 2),
+                pw.Text(
+                  'Mobile-Based Offline Class Record System',
+                  style: const pw.TextStyle(fontSize: 8.5, color: _soft),
+                ),
+              ],
+            ),
+          ),
+          pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.end,
+            children: [
+              pw.Text(
+                'TugboTrack',
+                style: pw.TextStyle(
+                  fontSize: 10,
+                  fontWeight: pw.FontWeight.bold,
+                  color: _navy,
+                ),
+              ),
+              pw.Text(
+                DateFormat.yMMMMd().format(DateTime.now()),
+                style: const pw.TextStyle(fontSize: 8, color: _soft),
+              ),
+            ],
+          ),
+        ],
+      ),
+      pw.SizedBox(height: 8),
+      pw.Container(height: 2, color: _navy),
+      pw.SizedBox(height: 10),
+      pw.Text(
+        title,
+        style: pw.TextStyle(
+          fontSize: 15,
+          fontWeight: pw.FontWeight.bold,
+          color: _ink,
+        ),
+      ),
+      pw.SizedBox(height: 6),
+      pw.Wrap(
+        spacing: 18,
+        runSpacing: 4,
+        children: [
+          for (final entry in meta)
+            pw.Text(
+              '${entry.$1}: ${entry.$2}',
+              style: const pw.TextStyle(fontSize: 8.5, color: _soft),
+            ),
+        ],
+      ),
+      pw.SizedBox(height: 12),
     ],
   );
 }
 
-pw.Widget _signatures() => pw.Padding(
-      padding: const pw.EdgeInsets.only(top: 40),
-      child: pw.Row(
-        mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
-        children: [
-          for (final label in ["Teacher's Signature", 'Head of School'])
-            pw.SizedBox(
-              width: 220,
-              child: pw.Column(
-                children: [
-                  pw.Container(height: 1, color: _ink),
-                  pw.SizedBox(height: 4),
-                  pw.Text(
-                    label,
-                    style: const pw.TextStyle(fontSize: 10, color: _ink),
-                  ),
-                ],
-              ),
-            ),
-        ],
+pw.Widget _table(
+  List<String> headers,
+  List<List<String>> rows, {
+  List<double>? widths,
+  List<int> numericColumns = const [],
+}) {
+  if (rows.isEmpty) {
+    return pw.Container(
+      padding: const pw.EdgeInsets.all(12),
+      decoration: pw.BoxDecoration(
+        color: _alt,
+        border: pw.Border.all(color: _head),
+      ),
+      child: pw.Text(
+        'No records yet.',
+        style: const pw.TextStyle(fontSize: 9, color: _soft),
       ),
     );
+  }
+  return pw.TableHelper.fromTextArray(
+    headers: headers,
+    data: rows,
+    border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.5),
+    headerDecoration: const pw.BoxDecoration(color: _head),
+    headerStyle: pw.TextStyle(
+      fontSize: 8,
+      fontWeight: pw.FontWeight.bold,
+      color: _ink,
+    ),
+    cellStyle: const pw.TextStyle(fontSize: 8, color: PdfColors.black),
+    cellAlignments: {
+      0: pw.Alignment.centerLeft,
+      for (final index in numericColumns) index: pw.Alignment.center,
+    },
+    columnWidths: widths == null
+        ? null
+        : {
+            for (var index = 0; index < widths.length; index++)
+              index: pw.FixedColumnWidth(widths[index]),
+          },
+    oddRowDecoration: const pw.BoxDecoration(color: _alt),
+    cellPadding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+  );
+}
 
-/// Full class record sheet for one subject + quarter (landscape A4).
+pw.Widget _signature(String teacherName) {
+  return pw.Column(
+    crossAxisAlignment: pw.CrossAxisAlignment.start,
+    children: [
+      pw.SizedBox(height: 26),
+      pw.Row(
+        children: [
+          pw.Expanded(
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Container(width: 170, height: 0.8, color: PdfColors.grey600),
+                pw.SizedBox(height: 3),
+                pw.Text(
+                  teacherName.isEmpty ? 'Subject Teacher' : teacherName,
+                  style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold),
+                ),
+                pw.Text(
+                  'Subject Teacher',
+                  style: const pw.TextStyle(fontSize: 7.5, color: _soft),
+                ),
+              ],
+            ),
+          ),
+          pw.Expanded(
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Container(width: 170, height: 0.8, color: PdfColors.grey600),
+                pw.SizedBox(height: 3),
+                pw.Text(
+                  'School Head / Principal',
+                  style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold),
+                ),
+                pw.Text(
+                  'Tugbo Integrated School',
+                  style: const pw.TextStyle(fontSize: 7.5, color: _soft),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ],
+  );
+}
+
+pw.Document _document(String title, BackupData data) {
+  final doc = pw.Document(title: title, author: 'TugboTrack');
+  return doc;
+}
+
+Future<Uint8List> _finish(pw.Document doc) async => await doc.save();
+
+/* ------------------------------ class record ------------------------------ */
+
+/// One subject, one term: WW / PT / TE percentages, initial grade, term grade.
 Future<Uint8List> buildClassRecordPdfBytes(
   BackupData data,
   Section section,
   Subject subject,
-  int quarter,
+  int term,
 ) async {
-  final doc = pw.Document();
-  final students = _studentsOfSection(data, subject.sectionId);
-  final sheet = data.sheets['${subject.id}::q$quarter'];
-  final rows = _rowsFor(data, subject, quarter);
-
-  // Column headers: No., Name, then each component's items + its % column.
-  final headers = <String>['No.', 'Name of Student'];
-  final groups = <ComponentKey>[];
-  for (final key in ComponentKey.values) {
-    final items = sheet?.items[key] ?? const <AssessmentItem>[];
-    for (final item in items) {
-      headers.add('${key.short}\n${item.title}\n/${item.max.round()}');
-    }
-    headers.add('${key.short}\n%');
-    groups.add(key);
+  final doc = _document('Class Record', data);
+  final roster = data.rosterOf(section.id);
+  final rows = <List<String>>[];
+  final finals = <double>[];
+  for (final student in roster) {
+    final result = data.gradeOf(subject, term, student.id);
+    String pct(AssessmentCategory category) =>
+        _num(result.components[category]?.percentage, 1);
+    if (result.termGrade != null) finals.add(result.termGrade!);
+    rows.add([
+      '${student.seatNumber}',
+      student.fullName,
+      pct(AssessmentCategory.writtenWorks),
+      pct(AssessmentCategory.performanceTasks),
+      pct(AssessmentCategory.termExam),
+      _num(result.initialGrade),
+      _grade(result.termGrade),
+      gradeDescriptors(result.termGrade),
+    ]);
   }
-  headers.addAll(['WW\n%', 'PT\n%', 'QA\n%', 'FINAL\nGRADE', 'REMARKS']);
+  final average = finals.isEmpty
+      ? null
+      : finals.reduce((a, b) => a + b) / finals.length;
+  final passed = finals.where((grade) => grade >= passingGrade).length;
 
-  final dataRows = <List<String>>[
-    for (var i = 0; i < rows.length; i++)
-      [
-        '${i + 1}',
-        rows[i].student.fullName,
-        for (final key in ComponentKey.values)
-          ...[
-            for (final item in sheet?.items[key] ?? const <AssessmentItem>[])
-              _scoreText(data, sheet, rows[i].student, item),
-            _fmt(rows[i].pcts[key], 1),
-          ],
-        _fmt(_wwOf(rows[i].pcts), 1),
-        _fmt(rows[i].pcts[ComponentKey.performanceTasks], 1),
-        _fmt(rows[i].pcts[ComponentKey.examinations], 1),
-        _fmt(rows[i].finalGrade, 1),
-        gradeRemarks(rows[i].finalGrade),
-      ],
-  ];
-
-  // Class average row.
-  final avgRow = <String>[
-    '',
-    'CLASS AVERAGE',
-    for (final key in ComponentKey.values)
-      ...[
-        for (final item in sheet?.items[key] ?? const <AssessmentItem>[])
-          _fmt(
-            _average([
-              for (final student in students)
-                double.tryParse(_scoreText(data, sheet, student, item)
-                    .replaceAll('—', '')),
-            ].cast<double?>()),
-            1,
-          ),
-        _fmt(_average([for (final row in rows) row.pcts[key]]), 1),
-      ],
-    _fmt(_average([for (final row in rows) _wwOf(row.pcts)]), 1),
-    _fmt(_average([for (final row in rows) row.pcts[ComponentKey.performanceTasks]]), 1),
-    _fmt(_average([for (final row in rows) row.pcts[ComponentKey.examinations]]), 1),
-    '',
-    '',
-  ];
-
-  final finals = [for (final row in rows) row.finalGrade].whereType<double>().toList();
-  final classAvg = finals.isEmpty ? null : finals.reduce((a, b) => a + b) / finals.length;
-  final highest = finals.isEmpty ? null : finals.reduce((a, b) => a > b ? a : b);
-  final lowest = finals.isEmpty ? null : finals.reduce((a, b) => a < b ? a : b);
-  final passed = finals.where((f) => f >= passingGrade).length;
-
-  final weights = subject.weights;
-  String pct(ComponentKey key) => '${(weights[key] ?? 0).round()}%';
+  final sheet = data.sheetOf(subject.id, term);
+  final assessmentRows = <List<String>>[];
+  if (sheet != null) {
+    for (final category in AssessmentCategory.values) {
+      for (final item in sheet.itemsOf(category)) {
+        assessmentRows.add([
+          category.short,
+          item.title,
+          _num(item.max, 0),
+          _num(subject.weights[category] ?? 0, 0),
+        ]);
+      }
+    }
+  }
 
   doc.addPage(
-    pw.Page(
-      pageFormat: PdfPageFormat.a4.landscape,
-      margin: const pw.EdgeInsets.all(36),
-      build: (context) => pw.Column(
-        crossAxisAlignment: pw.CrossAxisAlignment.start,
-        children: [
-          _heading(
-            'CLASS RECORD',
-            'Tugbo Integrated School — ${section.gradeLevel}, ${section.section}',
-          ),
-          _metaRow('Subject', subject.name, label2: 'Quarter', value2: 'Q$quarter'),
-          _metaRow('School Year', section.schoolYear,
-              label2: 'Teacher',
-              value2: subject.teacherName.isEmpty
-                  ? data.teacherName
-                  : subject.teacherName),
-          _metaRow(
+    pw.MultiPage(
+      pageFormat: PdfPageFormat.a4,
+      margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 24),
+      footer: (context) => pw.Align(
+        alignment: pw.Alignment.centerRight,
+        child: pw.Text(
+          'Page ${context.pageNumber} of ${context.pagesCount}',
+          style: const pw.TextStyle(fontSize: 7.5, color: _soft),
+        ),
+      ),
+      build: (context) => [
+        _header('CLASS RECORD', [
+          ('Class', section.title),
+          ('School Year', section.schoolYear),
+          ('Term', termLabel(term)),
+          ('Subject', subject.name),
+          ('Curriculum', section.curriculum.label),
+          (
             'Weights',
-            'Quiz ${pct(ComponentKey.quizzes)} · Assign ${pct(ComponentKey.assignments)} · '
-                'Act ${pct(ComponentKey.activities)} · PT ${pct(ComponentKey.performanceTasks)} · '
-                'Exam ${pct(ComponentKey.examinations)}'
-                '${subject.transmute ? ' · transmuted (DO 8, s. 2015)' : ''}',
+            [
+              for (final category in AssessmentCategory.values)
+                '${category.short} ${_num(subject.weights[category] ?? 0, 0)}%',
+            ].join(' · '),
           ),
-          pw.SizedBox(height: 8),
-          if (rows.isEmpty)
+        ]),
+        _table(
+          const ['#', 'Learner', 'WW %', 'PT %', 'TE %', 'Initial', 'Term', 'Descriptor'],
+          rows,
+          widths: [22, 148, 42, 42, 42, 48, 40, 96],
+          numericColumns: [0, 2, 3, 4, 5, 6],
+        ),
+        pw.SizedBox(height: 8),
+        pw.Row(
+          children: [
             pw.Text(
-              'No students in this class.',
-              style: const pw.TextStyle(fontSize: 11, color: _soft),
-            )
-          else
-            pw.TableHelper.fromTextArray(
-              headers: headers,
-              data: [...dataRows, avgRow],
-              headerCount: 1,
-              headerStyle: pw.TextStyle(
-                fontSize: 6.5,
+              'Class average: ${average == null ? '—' : _num(average, 2)}   ·   '
+              'Passed: $passed / ${roster.length}',
+              style: pw.TextStyle(
+                fontSize: 8.5,
                 fontWeight: pw.FontWeight.bold,
-                color: _navy,
+                color: _ink,
               ),
-              cellStyle: const pw.TextStyle(fontSize: 7, color: _ink),
-              oddCellStyle: const pw.TextStyle(fontSize: 7, color: _ink),
-              cellPadding: const pw.EdgeInsets.all(3),
-              headerPadding: const pw.EdgeInsets.all(3),
-              headerAlignment: pw.Alignment.center,
-              cellAlignment: pw.Alignment.center,
-              headerDecoration: const pw.BoxDecoration(color: _head),
-              rowDecoration: const pw.BoxDecoration(color: PdfColors.white),
-              oddRowDecoration: const pw.BoxDecoration(color: _totalBg),
-              cellAlignments: {
-                1: pw.Alignment.centerLeft,
-                headers.length - 1: pw.Alignment.centerLeft,
-              },
-              defaultColumnWidth: const pw.FlexColumnWidth(),
             ),
-          pw.SizedBox(height: 10),
-          pw.TableHelper.fromTextArray(
-            headers: const ['Class Average', 'Highest', 'Lowest', 'Passed (≥75)'],
-            data: [
-              [
-                _fmt(classAvg),
-                _fmt(highest),
-                _fmt(lowest),
-                '$passed / ${students.length}',
-              ],
-            ],
-            headerStyle: pw.TextStyle(
-              fontSize: 8,
-              fontWeight: pw.FontWeight.bold,
-              color: _navy,
-            ),
-            cellStyle: pw.TextStyle(
+          ],
+        ),
+        if (assessmentRows.isNotEmpty) ...[
+          pw.SizedBox(height: 18),
+          pw.Text(
+            'Assessments recorded (${termLabel(term)})',
+            style: pw.TextStyle(
               fontSize: 10,
               fontWeight: pw.FontWeight.bold,
               color: _ink,
             ),
-            cellAlignment: pw.Alignment.center,
-            headerAlignment: pw.Alignment.center,
-            headerDecoration: const pw.BoxDecoration(color: _head),
-            columnWidths: const {
-              0: pw.FlexColumnWidth(1),
-              1: pw.FlexColumnWidth(1),
-              2: pw.FlexColumnWidth(1),
-              3: pw.FlexColumnWidth(1),
-            },
           ),
-          _signatures(),
+          pw.SizedBox(height: 6),
+          _table(
+            const ['Category', 'Title', 'Highest Score', 'Weight %'],
+            assessmentRows,
+            widths: [60, 260, 90, 80],
+            numericColumns: [2, 3],
+          ),
         ],
-      ),
+        _signature(
+          subject.teacherName.isEmpty ? data.teacherName : subject.teacherName,
+        ),
+      ],
     ),
   );
-  return doc.save();
+  return _finish(doc);
 }
 
-String _scoreText(
-  BackupData data,
-  ScoreSheet? sheet,
-  Student student,
-  AssessmentItem item,
-) {
-  if (sheet == null) return '—';
-  final value = data.scores['${sheet.id}|${student.id}|${item.id}'];
-  if (value == null) return '—';
-  return value == value.roundToDouble()
-      ? '${value.round()}'
-      : value.toString();
-}
+/* ---------------------------- term grade sheet ---------------------------- */
 
-/// Roster-only sheet (names, LRN, guardian) for documentation (portrait A4).
-Future<Uint8List> buildRosterPdfBytes(
+/// All subjects of a class in one term: the term grade per learner.
+Future<Uint8List> buildTermGradesPdfBytes(
   BackupData data,
-  String sectionId,
   Section section,
+  int term,
 ) async {
-  final doc = pw.Document();
-  final students = _studentsOfSection(data, sectionId);
+  final doc = _document('Term Grades', data);
+  final subjects = data.subjectsOf(section.id)
+      .where((subject) => subject.covers(term))
+      .toList();
+  final roster = data.rosterOf(section.id);
+
+  final rows = <List<String>>[];
+  for (final student in roster) {
+    final grades = <String>[
+      for (final subject in subjects)
+        _grade(data.gradeOf(subject, term, student.id).termGrade),
+    ];
+    final values = [
+      for (final subject in subjects) data.gradeOf(subject, term, student.id).termGrade,
+    ].whereType<double>().toList();
+    final general = values.isEmpty
+        ? null
+        : values.reduce((a, b) => a + b) / values.length;
+    rows.add([
+      '${student.seatNumber}',
+      student.fullName,
+      ...grades,
+      _grade(general),
+      gradeDescriptors(general),
+    ]);
+  }
 
   doc.addPage(
-    pw.Page(
+    pw.MultiPage(
       pageFormat: PdfPageFormat.a4.landscape,
-      margin: const pw.EdgeInsets.all(36),
-      build: (context) => pw.Column(
-        crossAxisAlignment: pw.CrossAxisAlignment.start,
-        children: [
-          _heading(
-            'CLASS ROSTER',
-            'Tugbo Integrated School — ${section.gradeLevel}, ${section.section} · '
-                'SY ${section.schoolYear}',
+      margin: const pw.EdgeInsets.fromLTRB(26, 26, 26, 22),
+      build: (context) => [
+        _header('TERM GRADE REPORT', [
+          ('Class', section.title),
+          ('School Year', section.schoolYear),
+          ('Term', termLabel(term)),
+          ('Learners', '${roster.length}'),
+        ]),
+        if (subjects.isEmpty)
+          pw.Text(
+            'No subjects are offered in ${termLabel(term)}.',
+            style: const pw.TextStyle(fontSize: 9, color: _soft),
+          )
+        else
+          _table(
+            ['#', 'Learner', for (final subject in subjects) subject.name, 'General Average', 'Descriptor'],
+            rows,
+            numericColumns: [
+              for (var index = 2; index <= subjects.length + 3; index++) index,
+            ],
           ),
-          if (students.isEmpty)
-            pw.Text(
-              'No students.',
-              style: const pw.TextStyle(fontSize: 11, color: _soft),
-            )
-          else
-            pw.TableHelper.fromTextArray(
-              headers: const [
-                'Seat',
-                'Name',
-                'LRN',
-                'Gender',
-                'Birthday',
-                'Guardian',
-                'Contact',
-              ],
-              data: [
-                for (final student in students)
-                  [
-                    '${student.seatNumber}',
-                    student.fullName,
-                    student.lrn.isEmpty ? '—' : student.lrn,
-                    student.gender.isEmpty ? '—' : student.gender,
-                    student.birthday.isEmpty ? '—' : student.birthday,
-                    student.guardianName.isEmpty ? '—' : student.guardianName,
-                    student.guardianContact.isEmpty
-                        ? '—'
-                        : student.guardianContact,
-                  ],
-              ],
-              headerStyle: pw.TextStyle(
-                fontSize: 9,
-                fontWeight: pw.FontWeight.bold,
-                color: _navy,
-              ),
-              cellStyle: const pw.TextStyle(fontSize: 9, color: _ink),
-              cellPadding: const pw.EdgeInsets.all(5),
-              headerAlignment: pw.Alignment.center,
-              cellAlignment: pw.Alignment.centerLeft,
-              headerDecoration: const pw.BoxDecoration(color: _head),
-              rowDecoration: const pw.BoxDecoration(color: PdfColors.white),
-              oddRowDecoration: const pw.BoxDecoration(color: _totalBg),
-              columnWidths: const {
-                0: pw.FlexColumnWidth(0.6),
-                1: pw.FlexColumnWidth(2.4),
-                2: pw.FlexColumnWidth(1.6),
-                3: pw.FlexColumnWidth(0.9),
-                4: pw.FlexColumnWidth(1.2),
-                5: pw.FlexColumnWidth(1.8),
-                6: pw.FlexColumnWidth(1.3),
-              },
-            ),
-          pw.Spacer(),
-          pw.Center(
-            child: pw.Text(
-              'Generated by TIS ClassTrack · '
-              '${DateFormat('MMMM d, y').format(DateTime.now())}',
-              style: const pw.TextStyle(fontSize: 8, color: _soft),
-            ),
-          ),
-        ],
-      ),
+        _signature(data.teacherName),
+      ],
     ),
   );
-  return doc.save();
+  return _finish(doc);
 }
 
-/// Open the system print dialog with the class record.
-Future<bool> printClassRecord(
-  BackupData data,
-  Section section,
-  Subject subject,
-  int quarter,
-) async {
-  final bytes = await buildClassRecordPdfBytes(data, section, subject, quarter);
-  return Printing.layoutPdf(
-    onLayout: (_) async => bytes,
-    name: 'Class Record ${subject.name} Q$quarter',
-  );
-}
+/* ------------------------------ final grades ------------------------------ */
 
-/// Open the system share sheet with the class record as a PDF.
-Future<bool> shareClassRecordPdf(
+/// Final grades of the class: term averages per subject.
+Future<Uint8List> buildFinalGradesPdfBytes(
   BackupData data,
-  Section section,
-  Subject subject,
-  int quarter,
-) async {
-  final bytes = await buildClassRecordPdfBytes(data, section, subject, quarter);
-  return Printing.sharePdf(
-    bytes: bytes,
-    filename: '${_safeName('class-record-${subject.name}-Q$quarter')}.pdf',
-  );
-}
-
-/// Open the system share sheet with the roster as a PDF.
-Future<bool> shareRosterPdf(
-  BackupData data,
-  String sectionId,
   Section section,
 ) async {
-  final bytes = await buildRosterPdfBytes(data, sectionId, section);
-  return Printing.sharePdf(
-    bytes: bytes,
-    filename: '${_safeName('roster-${section.gradeLevel}-${section.section}')}.pdf',
+  final doc = _document('Final Grades', data);
+  final subjects = data.subjectsOf(section.id);
+  final roster = data.rosterOf(section.id);
+
+  final rows = <List<String>>[];
+  for (final student in roster) {
+    final finals = <String>[
+      for (final subject in subjects) _grade(data.finalGradeOf(subject, student.id)),
+    ];
+    final values = [
+      for (final subject in subjects) data.finalGradeOf(subject, student.id),
+    ].whereType<double>().toList();
+    final general =
+        values.isEmpty ? null : values.reduce((a, b) => a + b) / values.length;
+    rows.add([
+      '${student.seatNumber}',
+      student.fullName,
+      ...finals,
+      _grade(general),
+      gradeRemarks(general).isEmpty ? gradeDescriptors(general) : gradeRemarks(general),
+    ]);
+  }
+
+  doc.addPage(
+    pw.MultiPage(
+      pageFormat: PdfPageFormat.a4.landscape,
+      margin: const pw.EdgeInsets.fromLTRB(26, 26, 26, 22),
+      build: (context) => [
+        _header('FINAL GRADE REPORT', [
+          ('Class', section.title),
+          ('School Year', section.schoolYear),
+          ('Subjects', '${subjects.length}'),
+          ('Learners', '${roster.length}'),
+        ]),
+        if (subjects.isEmpty)
+          pw.Text(
+            'Add subjects to this class to compute final grades.',
+            style: const pw.TextStyle(fontSize: 9, color: _soft),
+          )
+        else
+          _table(
+            ['#', 'Learner', for (final subject in subjects) subject.name, 'General Average', 'Remarks'],
+            rows,
+            numericColumns: [
+              for (var index = 2; index <= subjects.length + 3; index++) index,
+            ],
+          ),
+        _signature(data.teacherName),
+      ],
+    ),
   );
+  return _finish(doc);
 }
 
-/// Share an arbitrary file (CSV exports) with the system share sheet.
-Future<void> shareFile(String path, {String? title}) {
-  return SharePlus.instance.share(
-    ShareParams(files: [XFile(path)], title: title),
+/* --------------------------------- roster --------------------------------- */
+
+/// Learner profile sheet of a class.
+Future<Uint8List> buildRosterPdfBytes(BackupData data, Section section) async {
+  final doc = _document('Learner Roster', data);
+  final roster = data.rosterOf(section.id);
+  doc.addPage(
+    pw.MultiPage(
+      pageFormat: PdfPageFormat.a4,
+      margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 24),
+      build: (context) => [
+        _header('LEARNER ROSTER', [
+          ('Class', section.title),
+          ('School Year', section.schoolYear),
+          ('Curriculum', section.curriculum.label),
+          ('Learners', '${roster.length}'),
+        ]),
+        _table(
+          const ['#', 'Name', 'LRN', 'Sex', 'Birthday', 'Guardian', 'Contact'],
+          [
+            for (final student in roster)
+              [
+                '${student.seatNumber}',
+                student.fullName,
+                student.lrn.isEmpty ? '—' : student.lrn,
+                student.gender.isEmpty
+                    ? '—'
+                    : student.gender.substring(0, 1).toUpperCase(),
+                student.birthday.isEmpty ? '—' : student.birthday,
+                student.guardianName.isEmpty ? '—' : student.guardianName,
+                student.guardianContact.isEmpty ? '—' : student.guardianContact,
+              ],
+          ],
+          widths: [22, 120, 66, 26, 62, 96, 76],
+          numericColumns: [0, 3],
+        ),
+        _signature(data.teacherName),
+      ],
+    ),
   );
+  return _finish(doc);
 }
 
-String _safeName(String value) => value.replaceAll(RegExp(r'[^a-zA-Z0-9-_]+'), '-');
+/* ------------------------------- attendance ------------------------------- */
 
-/* ---------------------------------- CSV ------------------------------------ */
-
-String _csvCell(String value) => RegExp(r'[",\n]').hasMatch(value)
-    ? '"${value.replaceAll('"', '""')}"'
-    : value;
-
-/// Wide CSV of computed grades for a subject + quarter (spreadsheet-ready).
-String buildClassRecordCsv(
+/// Attendance summary of a class.
+Future<Uint8List> buildAttendancePdfBytes(
   BackupData data,
   Section section,
-  Subject subject,
-  int quarter,
-) {
-  final rows = _rowsFor(data, subject, quarter);
+) async {
+  final doc = _document('Attendance', data);
+  final roster = data.rosterOf(section.id);
+  final days = data.attendance.values
+      .where((day) => day.sectionId == section.id)
+      .toList()
+    ..sort((a, b) => a.date.compareTo(b.date));
 
-  final header = <String>[
-    'Seat',
-    'Student',
-    'LRN',
-    'Birthday',
-    'Guardian',
-    'Contact',
-    for (final key in ComponentKey.values) '${key.short} %',
-    'Final Grade',
-    'Remarks',
-  ];
+  final rows = <List<String>>[];
+  for (final student in roster) {
+    var present = 0, late = 0, absent = 0, excused = 0, recorded = 0;
+    for (final day in days) {
+      final status = day.statuses[student.id];
+      if (status == null) continue;
+      recorded += 1;
+      switch (status) {
+        case AttendanceStatus.present:
+          present += 1;
+        case AttendanceStatus.late:
+          late += 1;
+        case AttendanceStatus.absent:
+          absent += 1;
+        case AttendanceStatus.excused:
+          excused += 1;
+      }
+    }
+    final rate = recorded == 0 ? null : (present + late) / recorded * 100;
+    rows.add([
+      '${student.seatNumber}',
+      student.fullName,
+      '$recorded',
+      '$present',
+      '$late',
+      '$absent',
+      '$excused',
+      rate == null ? '—' : '${_num(rate, 1)}%',
+    ]);
+  }
 
-  final lines = <String>[
-    header.map(_csvCell).join(','),
-    for (final row in rows)
-      [
-        '${row.student.seatNumber}',
-        row.student.fullName,
-        row.student.lrn,
-        row.student.birthday,
-        row.student.guardianName,
-        row.student.guardianContact,
-        for (final key in ComponentKey.values)
-          row.pcts[key] == null ? '' : row.pcts[key]!.toStringAsFixed(1),
-        row.finalGrade == null ? '' : row.finalGrade!.toStringAsFixed(2),
-        gradeRemarks(row.finalGrade),
-      ].map(_csvCell).join(','),
-  ];
+  doc.addPage(
+    pw.MultiPage(
+      pageFormat: PdfPageFormat.a4,
+      margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 24),
+      build: (context) => [
+        _header('ATTENDANCE REPORT', [
+          ('Class', section.title),
+          ('School Year', section.schoolYear),
+          ('Days recorded', '${days.length}'),
+          ('Learners', '${roster.length}'),
+        ]),
+        _table(
+          const ['#', 'Learner', 'Days', 'Present', 'Late', 'Absent', 'Excused', 'Rate'],
+          rows,
+          widths: [22, 170, 40, 46, 36, 44, 48, 46],
+          numericColumns: [0, 2, 3, 4, 5, 6, 7],
+        ),
+        _signature(data.teacherName),
+      ],
+    ),
+  );
+  return _finish(doc);
+}
 
-  final finals = [for (final row in rows) row.finalGrade].whereType<double>().toList();
-  lines
-    ..add('')
-    ..add([
-      'CLASS AVERAGE',
-      '', '', '', '', '',
-      for (final key in ComponentKey.values)
-        _fmt(_average([for (final row in rows) row.pcts[key]]), 1),
-      finals.isEmpty
-          ? ''
-          : (finals.reduce((a, b) => a + b) / finals.length).toStringAsFixed(2),
-      '',
-    ].map(_csvCell).join(','));
+/* -------------------------------- printing -------------------------------- */
 
-  return lines.join('\r\n');
+/// Opens the platform print dialog for [bytes].
+Future<void> printPdfBytes(Uint8List bytes, {required String name}) async {
+  await Printing.layoutPdf(
+    name: name,
+    onLayout: (format) async => bytes,
+  );
+}
+
+/// Opens the share sheet with the PDF attached.
+Future<void> sharePdfBytes(
+  Uint8List bytes, {
+  required String name,
+  String? subject,
+}) async {
+  await Printing.sharePdf(bytes: bytes, filename: name);
 }

@@ -27,9 +27,9 @@ class StudentProfileScreen extends StatefulWidget {
 }
 
 class _StudentProfileScreenState extends State<StudentProfileScreen> {
-  int _quarter = _currentQuarter();
+  int _term = _currentTerm();
 
-  static int _currentQuarter() {
+  static int _currentTerm() {
     final month = DateTime.now().month;
     if (month <= 9) return 1;
     if (month <= 11) return 2;
@@ -88,6 +88,8 @@ class _StudentProfileScreenState extends State<StudentProfileScreen> {
       latestBmi == null
           ? null
           : computeBmi(latestBmi.heightCm, latestBmi.weightKg),
+      ageYears: student.ageAt(),
+      sex: student.gender,
     );
 
     final age = ageFromBirthday(student.birthday);
@@ -311,10 +313,11 @@ class _StudentProfileScreenState extends State<StudentProfileScreen> {
                 const _SectionTitle('Academic Performance'),
                 Segmented<int>(
                   options: [
-                    for (final q in quarters) SegmentedOption(q, 'Q$q'),
+                    for (final term in terms)
+                      SegmentedOption(term, termShortLabel(term)),
                   ],
-                  value: _quarter,
-                  onChange: (q) => setState(() => _quarter = q),
+                  value: _term,
+                  onChange: (term) => setState(() => _term = term),
                 ),
                 const SizedBox(height: 10),
                 if (subjectList.isEmpty)
@@ -331,16 +334,9 @@ class _StudentProfileScreenState extends State<StudentProfileScreen> {
                 else
                   for (final sub in subjectList)
                     Builder(builder: (context) {
-                      final sheet =
-                          state.sheets[state.sheetIdOf(sub.id, _quarter)];
-                      final result = computeQuarterGrade(
-                        sub.weights,
-                        sub.transmute,
-                        sheet,
-                        state.scores,
-                        student.id,
-                      );
-                      final remarks = gradeRemarks(result.finalGrade);
+                      final result = state.gradeOf(sub, _term, student.id);
+                      final finalGrade = state.finalGradeOf(sub, student.id);
+                      final remarks = gradeRemarks(finalGrade);
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 10),
                         child: AppCard(
@@ -360,9 +356,12 @@ class _StudentProfileScreenState extends State<StudentProfileScreen> {
                                       ),
                                     ),
                                     Text(
-                                      result.finalGrade == null
-                                          ? 'No scores recorded'
-                                          : '${result.finalGrade!.toStringAsFixed(2)} · Q$_quarter',
+                                      result.termGrade == null
+                                          ? (sub.covers(_term)
+                                              ? 'No scores recorded'
+                                              : 'Not offered in ${termLabel(_term)}')
+                                          : '${reportGrade(result.termGrade!)} · ${termLabel(_term)}'
+                                              '${finalGrade == null ? '' : ' · Final ${reportGrade(finalGrade)}'}',
                                       style: const TextStyle(
                                         fontSize: 12.5,
                                         color: AppColors.textSoft,
@@ -381,9 +380,9 @@ class _StudentProfileScreenState extends State<StudentProfileScreen> {
                                   ),
                                 ),
                               Text(
-                                result.finalGrade == null
+                                result.termGrade == null
                                     ? '—'
-                                    : result.finalGrade!.toStringAsFixed(1),
+                                    : '${reportGrade(result.termGrade!)}',
                                 style: const TextStyle(
                                   fontSize: 20,
                                   fontWeight: AppFonts.extrabold,
