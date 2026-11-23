@@ -13,6 +13,28 @@ import '../theme/app_theme.dart';
 import '../utils/format.dart';
 import '../widgets/ui.dart';
 
+/// Plausible measurement limits for a school learner.
+const double _minHeightCm = 50;
+const double _maxHeightCm = 250;
+const double _minWeightKg = 10;
+const double _maxWeightKg = 300;
+
+/// Validation message for a height/weight pair, or null when acceptable.
+String? _measurementError(double heightCm, double weightKg) {
+  if (heightCm <= 0 || weightKg <= 0) {
+    return 'Enter a valid height (cm) and weight (kg).';
+  }
+  if (heightCm < _minHeightCm || heightCm > _maxHeightCm) {
+    return 'Height must be between ${_minHeightCm.toInt()} and '
+        '${_maxHeightCm.toInt()} cm.';
+  }
+  if (weightKg < _minWeightKg || weightKg > _maxWeightKg) {
+    return 'Weight must be between ${_minWeightKg.toInt()} and '
+        '${_maxWeightKg.toInt()} kg.';
+  }
+  return null;
+}
+
 class BmiScreen extends StatefulWidget {
   const BmiScreen({super.key, this.sectionId, this.studentId});
 
@@ -63,9 +85,12 @@ class _BmiScreenState extends State<BmiScreen> {
     final latestBmi = latest == null
         ? null
         : computeBmi(latest.heightCm, latest.weightKg);
+    // Interpret with the learner's age on the measurement date, not today's.
     final interpretation = interpretBmi(
       latestBmi,
-      ageYears: student?.ageAt(),
+      ageYears: student?.ageAt(
+        latest == null ? null : parseIsoDate(latest.date),
+      ),
       sex: student?.gender,
     );
 
@@ -249,6 +274,7 @@ class _BmiScreenState extends State<BmiScreen> {
                               Padding(
                                 padding: const EdgeInsets.only(top: 14),
                                 child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Container(
                                       width: 92,
@@ -325,6 +351,29 @@ class _BmiScreenState extends State<BmiScreen> {
                                               color: AppColors.textSoft,
                                             ),
                                           ),
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            interpretation.advice,
+                                            style: const TextStyle(
+                                              fontSize: 11.5,
+                                              color: AppColors.textSoft,
+                                              height: 1.4,
+                                            ),
+                                          ),
+                                          if (interpretation
+                                              .reference.isNotEmpty)
+                                            Padding(
+                                              padding:
+                                                  const EdgeInsets.only(top: 4),
+                                              child: Text(
+                                                interpretation.reference,
+                                                style: const TextStyle(
+                                                  fontSize: 10.5,
+                                                  fontWeight: AppFonts.medium,
+                                                  color: AppColors.textFaint,
+                                                ),
+                                              ),
+                                            ),
                                         ],
                                       ),
                                     ),
@@ -386,9 +435,9 @@ class _BmiScreenState extends State<BmiScreen> {
                         _HistoryRow(
                           record: record,
                           revealed: _revealed,
-                          ageYears: student.ageAt(),
+                          ageYears: student.ageAt(parseIsoDate(record.date)),
                           sex: student.gender,
-                          onDelete: () => state.deleteBmi(record.id),
+                          onDelete: () => _confirmDelete(state, record),
                         ),
                   ],
                 ],
@@ -400,10 +449,53 @@ class _BmiScreenState extends State<BmiScreen> {
     );
   }
 
+  Future<void> _confirmDelete(AppState state, BmiRecord record) async {
+    final name =
+        state.students[record.studentId]?.fullName ?? 'this learner';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: AppColors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.lg),
+        ),
+        title: const Text(
+          'Delete BMI record?',
+          style: TextStyle(
+            fontSize: 17,
+            fontWeight: AppFonts.bold,
+            color: AppColors.navyDark,
+          ),
+        ),
+        content: Text(
+          'The ${formatShortDate(record.date)} height and weight of $name '
+          'will be removed from this device. This cannot be undone.',
+          style: const TextStyle(
+            fontSize: 13,
+            color: AppColors.textSoft,
+            height: 1.45,
+          ),
+        ),
+        actions: [
+          AppButton(
+            label: 'Cancel',
+            variant: ButtonVariant.ghost,
+            onTap: () => Navigator.of(dialogContext).pop(false),
+          ),
+          AppButton(
+            label: 'Delete',
+            onTap: () => Navigator.of(dialogContext).pop(true),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) state.deleteBmi(record.id);
+  }
+
   Future<void> _openEntry(Student student) async {
     final height = TextEditingController();
     final weight = TextEditingController();
-    final date = TextEditingController(text: todayIso());
+    var date = todayIso();
     var error = '';
 
     await showDialog<void>(
@@ -412,12 +504,29 @@ class _BmiScreenState extends State<BmiScreen> {
         builder: (dialogContext, setDialogState) {
           final h = double.tryParse(height.text.trim()) ?? 0;
           final w = double.tryParse(weight.text.trim()) ?? 0;
-          final preview = h > 0 && w > 0 ? computeBmi(h, w) : null;
+          final preview =
+              _measurementError(h, w) == null ? computeBmi(h, w) : null;
+          // Screened against the learner's age on the measurement date.
           final previewInterp = interpretBmi(
             preview,
-            ageYears: student.ageAt(),
+            ageYears: student.ageAt(parseIsoDate(date)),
             sex: student.gender,
           );
+
+          Future<void> pickDate() async {
+            final picked = await showDatePicker(
+              context: dialogContext,
+              initialDate: parseIsoDate(date) ?? DateTime.now(),
+              firstDate: DateTime(2000),
+              lastDate: DateTime.now(),
+              helpText: 'Measurement date',
+            );
+            if (picked == null) return;
+            setDialogState(() {
+              date = toIsoDate(picked);
+              error = '';
+            });
+          }
 
           return AlertDialog(
             backgroundColor: AppColors.white,
@@ -477,16 +586,37 @@ class _BmiScreenState extends State<BmiScreen> {
                         setDialogState(() => error = ''),
                   ),
                   const SizedBox(height: 10),
-                  TextField(
-                    controller: date,
-                    decoration: const InputDecoration(
-                      hintText: 'Date (YYYY-MM-DD)',
-                      border: OutlineInputBorder(
-                        borderRadius:
-                            BorderRadius.all(Radius.circular(AppRadius.md)),
+                  InkWell(
+                    onTap: pickDate,
+                    borderRadius: BorderRadius.circular(AppRadius.md),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 14),
+                      decoration: BoxDecoration(
+                        border:
+                            Border.all(color: AppColors.border, width: 1.5),
+                        borderRadius: BorderRadius.circular(AppRadius.md),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Ionicons.calendarOutline,
+                              size: 18, color: AppColors.navy),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Measured ${formatLongDate(date)}',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: AppFonts.medium,
+                                color: AppColors.navyDark,
+                              ),
+                            ),
+                          ),
+                          const Icon(Ionicons.chevronDown,
+                              size: 16, color: AppColors.textSoft),
+                        ],
                       ),
                     ),
-                    onChanged: (_) => setDialogState(() {}),
                   ),
                   if (preview != null && previewInterp != null) ...[
                     const SizedBox(height: 12),
@@ -532,6 +662,28 @@ class _BmiScreenState extends State<BmiScreen> {
                               ),
                             ),
                           ),
+                          const SizedBox(height: 6),
+                          Text(
+                            previewInterp.advice,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 11.5,
+                              color: AppColors.textSoft,
+                              height: 1.4,
+                            ),
+                          ),
+                          if (previewInterp.reference.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(
+                                previewInterp.reference,
+                                style: const TextStyle(
+                                  fontSize: 10.5,
+                                  fontWeight: AppFonts.medium,
+                                  color: AppColors.textFaint,
+                                ),
+                              ),
+                            ),
                         ],
                       ),
                     ),
@@ -563,19 +715,12 @@ class _BmiScreenState extends State<BmiScreen> {
                 onTap: () {
                   final h = double.tryParse(height.text.trim()) ?? 0;
                   final w = double.tryParse(weight.text.trim()) ?? 0;
-                  if (h <= 0 || w <= 0) {
-                    setDialogState(
-                        () => error = 'Enter a valid height (cm) and weight (kg).');
+                  final message = _measurementError(h, w);
+                  if (message != null) {
+                    setDialogState(() => error = message);
                     return;
                   }
-                  context.read<AppState>().setBmi(
-                        student.id,
-                        date.text.trim().isEmpty
-                            ? todayIso()
-                            : date.text.trim(),
-                        h,
-                        w,
-                      );
+                  context.read<AppState>().setBmi(student.id, date, h, w);
                   Navigator.of(dialogContext).pop();
                 },
               ),
