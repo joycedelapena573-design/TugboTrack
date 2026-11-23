@@ -8,6 +8,7 @@ import 'package:tugbotrack/models/models.dart';
 import 'package:tugbotrack/services/backup.dart';
 import 'package:tugbotrack/services/bmi.dart';
 import 'package:tugbotrack/services/grading.dart';
+import 'package:tugbotrack/services/reports.dart' as reports;
 
 const _subjectId = 'sub-1';
 
@@ -303,6 +304,79 @@ void main() {
       // initial = 100*.25 + 90*.5 + 80*.25 = 90
       expect(csv, contains('90.0'));
       expect(buildFinalGradesCsv(data, section), contains('General Mathematics'));
+    });
+  });
+
+  group('report card PDF', () {
+    test('builds one learner sheet with grades, attendance and BMI', () async {
+      const section = Section(
+        id: 'c1',
+        gradeLevel: 'Grade 11',
+        section: 'Sampaguita',
+        schoolYear: '2026-2027',
+        createdAt: 0,
+      );
+      final subject = Subject(
+        id: _subjectId,
+        sectionId: 'c1',
+        name: 'General Mathematics',
+        teacherName: 'Ms. Cruz',
+        weights: depedAcademicWeights,
+        transmute: true,
+        createdAt: 0,
+      );
+      final sheet = sheetWith(
+        ww: [item('ww1', 10, AssessmentCategory.writtenWorks)],
+        pt: [item('pt1', 10, AssessmentCategory.performanceTasks)],
+        te: [item('te1', 10, AssessmentCategory.termExam)],
+      );
+      const student = Student(
+        id: 'st1',
+        sectionId: 'c1',
+        seatNumber: 1,
+        fullName: 'Juan Dela Cruz',
+        lrn: '123456789012',
+        gender: 'Male',
+        birthday: '2010-01-01',
+        guardianName: '',
+        guardianContact: '',
+        createdAt: 0,
+      );
+      final data = BackupData(
+        teacherName: 'Ms. Cruz',
+        sections: {section.id: section},
+        students: {student.id: student},
+        subjects: {subject.id: subject},
+        sheets: {sheet.id: sheet},
+        scores: {
+          '$_subjectId::t1|st1|ww1': 10.0,
+          '$_subjectId::t1|st1|pt1': 9.0,
+          '$_subjectId::t1|st1|te1': 8.0,
+        },
+        attendance: const {
+          'c1::2026-08-03': AttendanceDay(
+            id: 'c1::2026-08-03',
+            sectionId: 'c1',
+            date: '2026-08-03',
+            statuses: {'st1': AttendanceStatus.present},
+            markedAt: 0,
+          ),
+        },
+        bmi: const {
+          'st1::2026-08-03': BmiRecord(
+            id: 'st1::2026-08-03',
+            studentId: 'st1',
+            date: '2026-08-03',
+            heightCm: 160,
+            weightKg: 55,
+            recordedAt: 0,
+          ),
+        },
+      );
+
+      final bytes = await reports.buildReportCardPdfBytes(data, section, student);
+      expect(bytes.length, greaterThan(1000));
+      expect(String.fromCharCodes(bytes.take(4)), '%PDF');
     });
   });
 

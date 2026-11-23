@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import '../models/models.dart';
 import '../services/bmi.dart';
 import '../services/grading.dart';
+import '../services/reports.dart' as reports;
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 import '../utils/format.dart';
@@ -28,12 +29,50 @@ class StudentProfileScreen extends StatefulWidget {
 
 class _StudentProfileScreenState extends State<StudentProfileScreen> {
   int _term = _currentTerm();
+  String? _reportBusy;
 
   static int _currentTerm() {
     final month = DateTime.now().month;
     if (month <= 9) return 1;
     if (month <= 11) return 2;
     return 3;
+  }
+
+  String _slug(String value) => value
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+      .replaceAll(RegExp(r'^-|-$'), '');
+
+  /// Builds this learner's report card and sends it to the print dialog or
+  /// the platform share sheet, like the class reports.
+  Future<void> _reportCard(BuildContext context, {required bool print}) async {
+    if (_reportBusy != null) return;
+    final state = context.read<AppState>();
+    final student = state.students[widget.studentId];
+    final section = student == null ? null : state.sections[student.sectionId];
+    if (student == null || section == null) return;
+    setState(() => _reportBusy =
+        print ? 'Opening the print dialog…' : 'Preparing the report card…');
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      final bytes = await reports.buildReportCardPdfBytes(
+        state.backupData(),
+        section,
+        student,
+      );
+      final name = 'report-card-${_slug(student.fullName)}.pdf';
+      if (print) {
+        await reports.printPdfBytes(bytes, name: name);
+      } else {
+        await reports.sharePdfBytes(bytes, name: name);
+      }
+    } catch (error) {
+      messenger?.showSnackBar(
+        SnackBar(content: Text('Could not generate the report card: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _reportBusy = null);
+    }
   }
 
   @override
@@ -178,6 +217,76 @@ class _StudentProfileScreenState extends State<StudentProfileScreen> {
                             color: AppColors.blue,
                           ),
                         ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                AppCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 38,
+                            height: 38,
+                            alignment: Alignment.center,
+                            decoration: const BoxDecoration(
+                              color: AppColors.ice,
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Ionicons.documentTextOutline,
+                                size: 19, color: AppColors.navy),
+                          ),
+                          const SizedBox(width: 10),
+                          const Expanded(
+                            child: Text(
+                              'Report Card',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: AppFonts.bold,
+                                color: AppColors.navyDark,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _reportBusy ??
+                            'Subjects with term and final grades, general '
+                                'average, attendance and BMI on one sheet.',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: AppColors.textSoft,
+                          height: 1.4,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: AppButton(
+                              label: 'Print PDF',
+                              icon: Ionicons.printOutline,
+                              variant: ButtonVariant.secondary,
+                              loading: _reportBusy != null,
+                              disabled: _reportBusy != null,
+                              onTap: () => _reportCard(context, print: true),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: AppButton(
+                              label: 'Share PDF',
+                              icon: Ionicons.shareSocialOutline,
+                              loading: _reportBusy != null,
+                              disabled: _reportBusy != null,
+                              onTap: () => _reportCard(context, print: false),
+                            ),
+                          ),
+                        ],
+                      ),
                     ],
                   ),
                 ),
