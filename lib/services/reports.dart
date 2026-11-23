@@ -14,6 +14,7 @@ import '../models/models.dart';
 import 'backup.dart';
 import 'bmi.dart';
 import 'grading.dart';
+import 'pdf_fonts.dart';
 
 const _navy = PdfColor.fromInt(0xFF0A3A8C);
 const _ink = PdfColor.fromInt(0xFF0B2E6E);
@@ -255,6 +256,7 @@ Future<Uint8List> buildClassRecordPdfBytes(
 
   doc.addPage(
     pw.MultiPage(
+      theme: await PdfFonts.theme(),
       pageFormat: PdfPageFormat.a4,
       margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 24),
       footer: (context) => pw.Align(
@@ -363,6 +365,7 @@ Future<Uint8List> buildTermGradesPdfBytes(
 
   doc.addPage(
     pw.MultiPage(
+      theme: await PdfFonts.theme(),
       pageFormat: PdfPageFormat.a4.landscape,
       margin: const pw.EdgeInsets.fromLTRB(26, 26, 26, 22),
       build: (context) => [
@@ -424,6 +427,7 @@ Future<Uint8List> buildFinalGradesPdfBytes(
 
   doc.addPage(
     pw.MultiPage(
+      theme: await PdfFonts.theme(),
       pageFormat: PdfPageFormat.a4.landscape,
       margin: const pw.EdgeInsets.fromLTRB(26, 26, 26, 22),
       build: (context) => [
@@ -461,6 +465,7 @@ Future<Uint8List> buildRosterPdfBytes(BackupData data, Section section) async {
   final roster = data.rosterOf(section.id);
   doc.addPage(
     pw.MultiPage(
+      theme: await PdfFonts.theme(),
       pageFormat: PdfPageFormat.a4,
       margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 24),
       build: (context) => [
@@ -543,6 +548,7 @@ Future<Uint8List> buildAttendancePdfBytes(
 
   doc.addPage(
     pw.MultiPage(
+      theme: await PdfFonts.theme(),
       pageFormat: PdfPageFormat.a4,
       margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 24),
       build: (context) => [
@@ -572,9 +578,51 @@ Future<Uint8List> buildAttendancePdfBytes(
 Future<Uint8List> buildReportCardPdfBytes(
   BackupData data,
   Section section,
-  Student student,
-) async {
+  Student student, {
+  String comment = '',
+}) async {
   final doc = _document('Report Card', data);
+  doc.addPage(await _reportCardPage(data, section, student, comment));
+  return _finish(doc);
+}
+
+/// Every learner in the class, one report card per page.
+Future<Uint8List> buildSectionReportCardsPdfBytes(
+  BackupData data,
+  Section section, {
+  Map<String, String> comments = const {},
+}) async {
+  final doc = _document('Report Cards - ${section.section}', data);
+  final roster = data.rosterOf(section.id);
+  if (roster.isEmpty) {
+    doc.addPage(
+      pw.Page(
+        theme: await PdfFonts.theme(),
+        pageFormat: PdfPageFormat.a4,
+        build: (context) => pw.Center(
+          child: pw.Text(
+            'No learners in ${section.gradeLevel} - ${section.section} yet.',
+            style: const pw.TextStyle(fontSize: 11, color: _soft),
+          ),
+        ),
+      ),
+    );
+  }
+  for (final student in roster) {
+    doc.addPage(
+      await _reportCardPage(data, section, student, comments[student.id] ?? ''),
+    );
+  }
+  return _finish(doc);
+}
+
+/// One learner's report card page (shared by single and bulk printing).
+Future<pw.MultiPage> _reportCardPage(
+  BackupData data,
+  Section section,
+  Student student,
+  String comment,
+) async {
   final subjects = data.subjectsOf(section.id);
 
   final rows = <List<String>>[];
@@ -642,8 +690,8 @@ Future<Uint8List> buildReportCardPdfBytes(
 
   final age = student.ageAt();
 
-  doc.addPage(
-    pw.MultiPage(
+  return pw.MultiPage(
+      theme: await PdfFonts.theme(),
       pageFormat: PdfPageFormat.a4,
       margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 24),
       footer: (context) => pw.Align(
@@ -754,11 +802,33 @@ Future<Uint8List> buildReportCardPdfBytes(
             style: const pw.TextStyle(fontSize: 7.5, color: _soft),
           ),
         ],
+        if (comment.trim().isNotEmpty) ...[
+          pw.SizedBox(height: 14),
+          pw.Text(
+            "Teacher's Remarks",
+            style: pw.TextStyle(
+              fontSize: 10,
+              fontWeight: pw.FontWeight.bold,
+              color: _ink,
+            ),
+          ),
+          pw.SizedBox(height: 4),
+          pw.Container(
+            width: double.infinity,
+            padding: const pw.EdgeInsets.all(8),
+            decoration: pw.BoxDecoration(
+              color: _alt,
+              border: pw.Border.all(color: _head),
+            ),
+            child: pw.Text(
+              comment.trim(),
+              style: const pw.TextStyle(fontSize: 8.5, color: _ink),
+            ),
+          ),
+        ],
         _signature(data.teacherName),
       ],
-    ),
-  );
-  return _finish(doc);
+    );
 }
 
 /* -------------------------------- printing -------------------------------- */

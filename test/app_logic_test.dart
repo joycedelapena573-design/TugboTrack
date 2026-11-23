@@ -1,14 +1,25 @@
 import 'dart:io';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
+import 'package:provider/provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:tugbotrack/data/database.dart';
 import 'package:tugbotrack/models/models.dart';
+import 'package:tugbotrack/screens/bmi.dart';
+import 'package:tugbotrack/screens/grades.dart';
+import 'package:tugbotrack/screens/home.dart';
+import 'package:tugbotrack/screens/settings.dart';
+import 'package:tugbotrack/services/attention.dart';
 import 'package:tugbotrack/services/backup.dart';
 import 'package:tugbotrack/services/bmi.dart';
+import 'package:tugbotrack/services/csv.dart';
 import 'package:tugbotrack/services/grading.dart';
 import 'package:tugbotrack/services/reports.dart' as reports;
+import 'package:tugbotrack/state/app_state.dart';
+import 'package:tugbotrack/theme/app_theme.dart';
+import 'package:tugbotrack/widgets/ui.dart';
 
 const _subjectId = 'sub-1';
 
@@ -591,6 +602,347 @@ void main() {
 
       await service.close();
       await deleteTempDir(dir);
+    });
+  });
+
+  group('dashboard attention list', () {
+    Section section() => const Section(
+          id: 'c1',
+          gradeLevel: 'Grade 11',
+          section: 'Sampaguita',
+          schoolYear: '2026-2027',
+          createdAt: 1,
+        );
+
+    Student student() => const Student(
+          id: 's1',
+          sectionId: 'c1',
+          seatNumber: 1,
+          fullName: 'Juan Dela Cruz',
+          lrn: '',
+          gender: 'Male',
+          birthday: '2010-01-01',
+          guardianName: '',
+          guardianContact: '',
+          createdAt: 1,
+        );
+
+    test('flags missing BMI, empty terms and repeated absences', () {
+      final data = BackupData(
+        teacherName: 'Teacher',
+        sections: {'c1': section()},
+        students: {'s1': student()},
+        subjects: {
+          'sub1': const Subject(
+            id: 'sub1',
+            sectionId: 'c1',
+            name: 'General Mathematics',
+            teacherName: '',
+            weights: depedAcademicWeights,
+            transmute: false,
+            createdAt: 1,
+          ),
+        },
+        sheets: const {},
+        scores: const {},
+        attendance: {
+          for (final date in ['2026-08-03', '2026-08-04', '2026-08-05'])
+            'c1::$date': AttendanceDay(
+              id: 'c1::$date',
+              sectionId: 'c1',
+              date: date,
+              statuses: const {'s1': AttendanceStatus.absent},
+              markedAt: 1,
+            ),
+        },
+        bmi: const {},
+      );
+
+      final items = attentionItems(
+        data,
+        term: 1,
+        calendar: const [
+          AcademicTerm(
+            id: 't1',
+            schoolYear: '2026-2027',
+            term: 1,
+            start: '2026-08-01',
+            end: '2026-10-31',
+          ),
+        ],
+      );
+
+      expect(items.any((item) => item.kind == AttentionKind.missingBmi), isTrue);
+      expect(
+        items.any((item) => item.kind == AttentionKind.noAssessments),
+        isTrue,
+      );
+      expect(
+        items.any((item) => item.kind == AttentionKind.frequentAbsence),
+        isTrue,
+      );
+      // Nothing has been graded yet, so no learner can be failing.
+      expect(items.any((item) => item.kind == AttentionKind.failing), isFalse);
+    });
+
+    test('flags a failing final grade and clears once it passes', () {
+      final sheet = ScoreSheet(
+        id: 'sub1::t1',
+        subjectId: 'sub1',
+        term: 1,
+        items: {
+          AssessmentCategory.writtenWorks: [
+            const AssessmentItem(
+              id: 'ww1',
+              title: 'Quiz 1',
+              max: 20,
+              category: AssessmentCategory.writtenWorks,
+            ),
+          ],
+          AssessmentCategory.performanceTasks: const [],
+          AssessmentCategory.termExam: const [],
+        },
+      );
+      BackupData build(double score) => BackupData(
+            teacherName: 'Teacher',
+            sections: {'c1': section()},
+            students: {'s1': student()},
+            subjects: {
+              'sub1': const Subject(
+                id: 'sub1',
+                sectionId: 'c1',
+                name: 'General Mathematics',
+                teacherName: '',
+                weights: depedAcademicWeights,
+                transmute: false,
+                createdAt: 1,
+              ),
+            },
+            sheets: {'sub1::t1': sheet},
+            scores: {'sub1::t1|s1|ww1': score},
+            attendance: const {},
+            bmi: const {},
+          );
+
+      expect(
+        attentionItems(build(5), term: 1)
+            .any((item) => item.kind == AttentionKind.failing),
+        isTrue,
+      );
+      expect(
+        attentionItems(build(18), term: 1)
+            .any((item) => item.kind == AttentionKind.failing),
+        isFalse,
+      );
+    });
+  });
+
+  group('BMI measurement import', () {
+    test('reads a headed CSV with height and weight', () {
+      final result = mapMeasurementRows(parseCsv(
+        'Name,Height (cm),Weight (kg),Date\n'
+        'Juan Dela Cruz,160,55,2026-08-03\n'
+        'Ana Reyes,150.5,42,08/04/2026\n',
+      ));
+
+      expect(result.errors, isEmpty);
+      expect(result.rows, hasLength(2));
+      expect(result.rows.first.fullName, 'Juan Dela Cruz');
+      expect(result.rows.first.heightCm, 160);
+      expect(result.rows.first.date, '2026-08-03');
+      expect(result.rows.last.weightKg, 42);
+    });
+
+    test('skips rows without a usable height or weight', () {
+      final result = mapMeasurementRows(parseCsv(
+        'Name,Height,Weight\nJuan Dela Cruz,160,\n',
+      ));
+      expect(result.rows, isEmpty);
+      expect(result.errors, isNotEmpty);
+    });
+  });
+
+  group('copying a class', () {
+    test('carries subjects, weights, learners and BMI but not scores',
+        () async {
+      final dir = await Directory.systemTemp.createTemp('tugbotrack-copy');
+      final service = DatabaseService(p.join(dir.path, 'copy.db'));
+      final state = AppState(database: service);
+      await state.load();
+
+      final section = state.addSection(
+        gradeLevel: 'Grade 11',
+        section: 'Sampaguita',
+        schoolYear: '2026-2027',
+      );
+      final learner = state.addStudent(Student(
+        id: '',
+        sectionId: section.id,
+        seatNumber: 1,
+        fullName: 'Ana Reyes',
+        lrn: '123',
+        gender: 'Female',
+        birthday: '2010-01-01',
+        guardianName: '',
+        guardianContact: '',
+        createdAt: 0,
+      ));
+      state.addSubject(
+        sectionId: section.id,
+        name: 'Cookery',
+        teacherName: '',
+        weights: depedTvlWeights,
+        transmute: false,
+      );
+      final subject = state.subjectsOf(section.id).first;
+      state.addItem(subject.id, 1, AssessmentCategory.writtenWorks, 'Quiz', 20);
+      final item =
+          state.sheetOf(subject.id, 1)!.itemsOf(AssessmentCategory.writtenWorks).first;
+      state.setScore(
+        '${subject.id}::t1',
+        learner.id,
+        item.id,
+        18,
+        term: 1,
+        subjectId: subject.id,
+      );
+      state.setBmi(learner.id, '2026-08-01', 160, 55);
+
+      final copy = state.copySection(
+        sourceId: section.id,
+        schoolYear: '2027-2028',
+        sectionName: 'Sampaguita',
+      );
+
+      expect(copy.schoolYear, '2027-2028');
+      final copiedSubjects = state.subjectsOf(copy.id);
+      expect(copiedSubjects, hasLength(1));
+      expect(copiedSubjects.first.name, 'Cookery');
+      expect(
+        copiedSubjects.first.weights[AssessmentCategory.performanceTasks],
+        60,
+      );
+      final copiedLearners = state.studentsOf(copy.id);
+      expect(copiedLearners, hasLength(1));
+      expect(copiedLearners.first.fullName, 'Ana Reyes');
+      expect(state.bmiHistory(copiedLearners.first.id), hasLength(1));
+      // Scores and attendance stay with the original year.
+      expect(state.sheetOf(copiedSubjects.first.id, 1), isNull);
+
+      await service.close();
+      await deleteTempDir(dir);
+    });
+  });
+
+  group('report cards', () {
+    Section section() => const Section(
+          id: 'c1',
+          gradeLevel: 'Grade 11',
+          section: 'Sampaguita',
+          schoolYear: '2026-2027',
+          createdAt: 1,
+        );
+
+    Student learner(String id, String name) => Student(
+          id: id,
+          sectionId: 'c1',
+          seatNumber: 1,
+          fullName: name,
+          lrn: '',
+          gender: 'Female',
+          birthday: '2010-01-01',
+          guardianName: '',
+          guardianContact: '',
+          createdAt: 1,
+        );
+
+    BackupData data() => BackupData(
+          teacherName: 'Teacher',
+          sections: {'c1': section()},
+          students: {
+            's1': learner('s1', 'Ana Reyes'),
+            's2': learner('s2', 'José Peña'),
+          },
+          subjects: const {},
+          sheets: const {},
+          scores: const {},
+          attendance: const {},
+          bmi: const {},
+        );
+
+    test('prints a saved remark and a whole-section booklet', () async {
+      final single = await reports.buildReportCardPdfBytes(
+        data(),
+        section(),
+        learner('s1', 'Ana Reyes'),
+        comment: 'Steady improvement in written work.',
+      );
+      expect(single.length, greaterThan(1000));
+      expect(String.fromCharCodes(single.take(4)), '%PDF');
+
+      // Unicode names must not stop the PDF from building.
+      final booklet = await reports.buildSectionReportCardsPdfBytes(
+        data(),
+        section(),
+      );
+      expect(booklet.length, greaterThan(1000));
+      expect(String.fromCharCodes(booklet.take(4)), '%PDF');
+    });
+  });
+
+  group('screen smoke builds', () {
+    testWidgets('BMI, Grade Book, Home and Settings render without errors',
+        (tester) async {
+      // No database is opened here: the screens must render from empty state.
+      final state = AppState()..tipsSeen = true;
+
+      Widget wrap(Widget child) => ChangeNotifierProvider<AppState>.value(
+            value: state,
+            child: MaterialApp(theme: buildAppTheme(), home: child),
+          );
+
+      final screens = <Widget>[
+        const BmiScreen(),
+        const GradesScreen(),
+        const HomeScreen(),
+        const SettingsScreen(),
+      ];
+      for (final screen in screens) {
+        await tester.pumpWidget(wrap(screen));
+        await tester.pump();
+        expect(
+          tester.takeException(),
+          isNull,
+          reason: '${screen.runtimeType} failed to build',
+        );
+      }
+    });
+  });
+
+  group('shared UI kit', () {
+    testWidgets('Screen supplies the Material ancestor ink controls need',
+        (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildAppTheme(),
+          home: Screen(
+            child: Column(
+              children: [
+                PageHeader(
+                  title: 'Test header',
+                  right: InkWell(
+                    onTap: () {},
+                    child: const Text('Action'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      expect(tester.takeException(), isNull);
+      expect(find.text('Action'), findsOneWidget);
     });
   });
 }

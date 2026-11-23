@@ -1,11 +1,12 @@
 /// Home dashboard: greeting, summary stats, search, and the teacher's classes.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide Badge;
 import 'package:ionicons/ionicons.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
+import '../services/attention.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 import '../utils/format.dart';
@@ -13,6 +14,7 @@ import '../widgets/ui.dart';
 import 'class_detail.dart';
 import 'section_form.dart';
 import 'settings.dart';
+import 'student_profile.dart';
 
 String _greeting() {
   final hour = DateTime.now().hour;
@@ -31,7 +33,101 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   bool _searchOpen = false;
   String _query = '';
+  bool _backingUp = false;
   final _searchController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowTips());
+  }
+
+  /// First-run guidance, shown once and skippable.
+  Future<void> _maybeShowTips() async {
+    if (!mounted) return;
+    final state = context.read<AppState>();
+    if (!state.hydrated || state.tipsSeen) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.bg,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Welcome to TugboTrack',
+                style: TextStyle(
+                  fontFamily: 'Poppins',
+                  fontSize: 18,
+                  fontWeight: AppFonts.bold,
+                  color: AppColors.navyDark,
+                ),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Three tips before you start.',
+                style: TextStyle(
+                  fontFamily: 'Poppins',
+                  fontSize: 12.5,
+                  color: AppColors.textSoft,
+                ),
+              ),
+              const SizedBox(height: 14),
+              const _Tip(
+                icon: Ionicons.lockClosed,
+                title: 'Your MPIN protects every record',
+                body: 'Learner names, grades, attendance and BMI stay on this '
+                    'device behind your 6-digit MPIN.',
+              ),
+              const _Tip(
+                icon: Ionicons.statsChart,
+                title: 'Scores compute the grades',
+                body: 'Add a class, its subjects and learners, then type scores. '
+                    'WW, PT and TE percentages, transmutation and the final grade '
+                    'are computed for you.',
+              ),
+              const _Tip(
+                icon: Ionicons.checkmarkDone,
+                title: 'Attendance in two taps',
+                body: 'Open a class and tap “All present”, then mark only the '
+                    'absentees. Backups are automatic every day.',
+              ),
+              const SizedBox(height: 16),
+              AppButton(
+                label: 'Got it',
+                onTap: () => Navigator.of(sheetContext).pop(),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (mounted) context.read<AppState>().markTipsSeen();
+  }
+
+  Future<void> _backupNow() async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    setState(() => _backingUp = true);
+    final file = await context.read<AppState>().backupNow();
+    if (!mounted) return;
+    setState(() => _backingUp = false);
+    messenger?.showSnackBar(
+      SnackBar(
+        content: Text(
+          file == null
+              ? 'Could not write a backup. Try again from Settings.'
+              : 'Database backup saved on this device.',
+        ),
+      ),
+    );
+  }
 
   @override
   void dispose() {
@@ -63,6 +159,23 @@ class _HomeScreenState extends State<HomeScreen> {
                 s.section.toLowerCase().contains(q) ||
                 s.schoolYear.toLowerCase().contains(q))
             .toList();
+    // Learners are searched across every class, not just the active one.
+    final learnerMatches = q.isEmpty
+        ? <Student>[]
+        : (state.students.values
+            .where((student) =>
+                !student.archived &&
+                state.sections[student.sectionId] != null &&
+                (student.fullName.toLowerCase().contains(q) ||
+                    student.lrn.toLowerCase().contains(q)))
+            .toList()
+          ..sort((a, b) => a.fullName.toLowerCase().compareTo(
+                b.fullName.toLowerCase(),
+              )))
+            .take(8)
+            .toList();
+    final attention = state.attention();
+    final backupAge = state.backupAgeDays;
 
     return Screen(
       child: ListView(
@@ -227,6 +340,76 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
           ),
+          if (backupAge == null || backupAge >= 7) ...[
+            const SizedBox(height: 10),
+            AppCard(
+              style: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    alignment: Alignment.center,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFFFFF1D6),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Ionicons.cloudOfflineOutline,
+                        size: 18, color: AppColors.amber),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      backupAge == null
+                          ? 'No database backup yet. Keep a copy in case the '
+                              'phone is lost or replaced.'
+                          : 'Last database backup was $backupAge days ago. '
+                              'Back it up now.',
+                      style: const TextStyle(
+                        fontFamily: 'Poppins',
+                        fontSize: 11.5,
+                        color: AppColors.textSoft,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  TextButton(
+                    onPressed: _backingUp ? null : _backupNow,
+                    child: Text(_backingUp ? '…' : 'Back up'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          if (attention.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            _AttentionCard(
+              items: attention.take(4).toList(),
+              total: attention.length,
+              onOpen: (item) {
+                final sectionId = item.sectionId;
+                if (sectionId == null) return;
+                state.setActiveSection(sectionId);
+                if (item.studentId != null &&
+                    state.students.containsKey(item.studentId)) {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          StudentProfileScreen(studentId: item.studentId!),
+                    ),
+                  );
+                } else {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          ClassDetailScreen(sectionId: sectionId),
+                    ),
+                  );
+                }
+              },
+            ),
+          ],
           const SizedBox(height: 22),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -344,7 +527,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         enabledBorder: InputBorder.none,
                         focusedBorder: InputBorder.none,
                         contentPadding: EdgeInsets.symmetric(vertical: 12),
-                        hintText: 'Search grade, section or school year',
+                        hintText: 'Search learner, class or school year',
                         hintStyle: TextStyle(
                           fontFamily: 'Poppins',
                           fontSize: 14.5,
@@ -381,16 +564,42 @@ class _HomeScreenState extends State<HomeScreen> {
                 MaterialPageRoute(builder: (_) => const SectionFormScreen()),
               ),
             )
-          else if (visibleList.isEmpty)
+          else if (visibleList.isEmpty && learnerMatches.isEmpty)
             EmptyState(
               icon: Ionicons.searchOutline,
               title: 'No matches',
               subtitle:
-                  'Nothing matches “${_query.trim()}”. Try another grade level, section or school year.',
+                  'Nothing matches “${_query.trim()}”. Try a learner name, LRN, grade level or section.',
             )
-          else
+          else ...[
+            if (learnerMatches.isNotEmpty) ...[
+              const Padding(
+                padding: EdgeInsets.only(bottom: 8, top: 2),
+                child: Text(
+                  'Learners',
+                  style: TextStyle(
+                    fontFamily: 'Poppins',
+                    fontSize: 15,
+                    fontWeight: AppFonts.bold,
+                    color: AppColors.navyDark,
+                  ),
+                ),
+              ),
+              for (final student in learnerMatches)
+                _LearnerResult(
+                  student: student,
+                  section: state.sections[student.sectionId],
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => StudentProfileScreen(studentId: student.id),
+                    ),
+                  ),
+                ),
+              if (visibleList.isNotEmpty) const SizedBox(height: 6),
+            ],
             for (final section in visibleList)
               _ClassCard(section: section, today: today),
+          ],
         ],
       ),
     );
@@ -483,6 +692,268 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _Tip extends StatelessWidget {
+  const _Tip({required this.icon, required this.title, required this.body});
+
+  final IconData icon;
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            alignment: Alignment.center,
+            decoration: const BoxDecoration(
+              color: AppColors.ice,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, size: 18, color: AppColors.navy),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontFamily: 'Poppins',
+                    fontSize: 13.5,
+                    fontWeight: AppFonts.semibold,
+                    color: AppColors.navyDark,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  body,
+                  style: const TextStyle(
+                    fontFamily: 'Poppins',
+                    fontSize: 11.5,
+                    color: AppColors.textSoft,
+                    height: 1.45,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+IconData _attentionIcon(AttentionKind kind) {
+  switch (kind) {
+    case AttentionKind.missingBmi:
+      return Ionicons.bodyOutline;
+    case AttentionKind.frequentAbsence:
+      return Ionicons.calendarClearOutline;
+    case AttentionKind.noAssessments:
+      return Ionicons.createOutline;
+    case AttentionKind.failing:
+      return Ionicons.trendingDownOutline;
+  }
+}
+
+class _AttentionCard extends StatelessWidget {
+  const _AttentionCard({
+    required this.items,
+    required this.total,
+    required this.onOpen,
+  });
+
+  final List<AttentionItem> items;
+  final int total;
+  final ValueChanged<AttentionItem> onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppCard(
+      style: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Ionicons.alertCircleOutline,
+                  size: 18, color: AppColors.amber),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Needs attention',
+                  style: const TextStyle(
+                    fontFamily: 'Poppins',
+                    fontSize: 14,
+                    fontWeight: AppFonts.bold,
+                    color: AppColors.navyDark,
+                  ),
+                ),
+              ),
+              Badge(label: '$total', color: AppColors.amber, bg: const Color(0xFFFFF1D6)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          for (final item in items)
+            Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(AppRadius.sm),
+                onTap: () => onOpen(item),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 7),
+                  child: Row(
+                    children: [
+                      Icon(_attentionIcon(item.kind),
+                          size: 16, color: AppColors.textSoft),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              item.title,
+                              style: const TextStyle(
+                                fontFamily: 'Poppins',
+                                fontSize: 12.5,
+                                fontWeight: AppFonts.semibold,
+                                color: AppColors.text,
+                              ),
+                            ),
+                            Text(
+                              item.detail,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontFamily: 'Poppins',
+                                fontSize: 11,
+                                color: AppColors.textSoft,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Icon(Ionicons.chevronForward,
+                          size: 16, color: AppColors.textFaint),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          if (total > items.length)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                '+${total - items.length} more in reports',
+                style: const TextStyle(
+                  fontFamily: 'Poppins',
+                  fontSize: 10.5,
+                  color: AppColors.textFaint,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LearnerResult extends StatelessWidget {
+  const _LearnerResult({
+    required this.student,
+    required this.section,
+    required this.onTap,
+  });
+
+  final Student student;
+  final Section? section;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(AppRadius.md),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(AppRadius.md),
+              border: Border.all(color: AppColors.border),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 34,
+                  height: 34,
+                  alignment: Alignment.center,
+                  decoration: const BoxDecoration(
+                    color: AppColors.ice,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Text(
+                    initialsOf(student.fullName),
+                    style: const TextStyle(
+                      fontFamily: 'Poppins',
+                      fontSize: 12,
+                      fontWeight: AppFonts.bold,
+                      color: AppColors.navy,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        student.fullName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontFamily: 'Poppins',
+                          fontSize: 13.5,
+                          fontWeight: AppFonts.semibold,
+                          color: AppColors.text,
+                        ),
+                      ),
+                      Text(
+                        section == null
+                            ? 'Class not found'
+                            : '${section!.section} · ${section!.schoolYear}'
+                                '${student.lrn.isEmpty ? '' : ' · ${student.lrn}'}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontFamily: 'Poppins',
+                          fontSize: 11,
+                          color: AppColors.textSoft,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(Ionicons.chevronForward,
+                    size: 16, color: AppColors.textFaint),
+              ],
+            ),
           ),
         ),
       ),

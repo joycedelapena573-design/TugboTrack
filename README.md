@@ -67,13 +67,36 @@ on the device — no internet, no accounts, no cloud.
   5–19 using the record date, birthday and sex (falling back to adult cut-offs
   when those are unknown) — not adult categories applied universally.
 
+### Classroom shortcuts
+- **Score grid**: every learner down the side and every assessment across the
+  top, type-and-Enter cells with an automatic grade column. Tap a column header
+  to fill the whole class with one score.
+- **Copy a class** into another school year: subjects, term spans and grading
+  weights come along, and the learners (with their BMI history) are optional.
+- New subjects start from the weights used on the last subject.
+- **Global search** on the dashboard finds a learner by name or LRN across all
+  classes, and the **Needs attention** card lists missing BMI records, subjects
+  with no assessments, repeated absences and learners below passing.
+- **Mark all present** on the attendance board, which reopens on the day last
+  worked for that class; learners with 3+ absences in the term are flagged in
+  the roster.
+- BMI measurements can be **imported from CSV** (name, height, weight, date),
+  and a deleted measurement can be undone.
+- **Teacher's remarks** per learner are saved on the device and printed on the
+  report card; a whole section's report cards print in one PDF.
+- **Larger text** toggle in Settings; the app rotates for landscape use.
+
 ### Security and backups
 - **6-digit MPIN**: set up on first launch, required on every open and when the
   app returns from the background, changeable in Settings. Stored only as a
   salted SHA-256 hash in the device keychain.
 - **Automatic CSV backup** after every save, plus on-demand full CSV export.
-- **Database backup and restore** (copy of the SQLite file), with confirmation
-  before anything destructive.
+- **Daily database backup** (rolling copies of the SQLite file, newest 7 kept),
+  with a dashboard warning when the last one is a week old.
+- **Database backup and restore** (copy of the SQLite file), with a preview of
+  the class/learner/record counts before anything destructive.
+- **Whole-school-year export**: one CSV per class (roster, attendance, final
+  grades, every class record) shared in one step.
 
 ---
 
@@ -107,6 +130,7 @@ plus `kv` for app settings.
 | Dashboard | `lib/screens/home.dart` |
 | Class detail (roster, attendance, archive) | `lib/screens/class_detail.dart` |
 | Grade book (assessments + term grades) | `lib/screens/grades.dart` |
+| Score grid (spreadsheet entry) | `lib/screens/score_grid.dart` |
 | Attendance (seat board) | `lib/screens/attendance.dart` |
 | BMI monitoring | `lib/screens/bmi.dart` |
 | Reports | `lib/screens/reports.dart` |
@@ -125,7 +149,7 @@ lib/state/              # app store (ChangeNotifier) and MPIN lock
 lib/services/           # grading, BMI, CSV, importer, backups, MPIN, PDFs
 lib/screens/            # one file per screen
 lib/widgets/            # shared UI kit, seat board, pin pad, school logo
-test/                   # grading, calendar, migration, BMI and CSV tests
+test/                   # grading, calendar, migration, BMI, CSV, attention and screen tests
 ```
 
 ## Getting started

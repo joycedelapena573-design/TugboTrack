@@ -199,3 +199,97 @@ StudentImportResult mapStudentRows(List<List<String>> rows) {
   }
   return StudentImportResult(students: students, errors: errors);
 }
+
+/* ----------------------------- BMI measurements ---------------------------- */
+
+class MeasurementImportRow {
+  const MeasurementImportRow({
+    required this.fullName,
+    required this.heightCm,
+    required this.weightKg,
+    required this.date,
+  });
+
+  final String fullName;
+  final double heightCm;
+  final double weightKg;
+
+  /// ISO date, or '' when the file has no date column (today is used).
+  final String date;
+}
+
+class MeasurementImportResult {
+  const MeasurementImportResult({required this.rows, required this.errors});
+
+  final List<MeasurementImportRow> rows;
+  final List<String> errors;
+}
+
+const Map<String, List<String>> _measurementAliases = {
+  'name': ['name', 'full name', 'student', 'student name', 'learner name'],
+  'height': ['height', 'height cm', 'height in cm', 'height (cm)'],
+  'weight': ['weight', 'weight kg', 'weight in kg', 'weight (kg)'],
+  'date': ['date', 'measured', 'measurement date', 'date measured'],
+};
+
+/// Maps CSV rows to height/weight measurements for the BMI screen.
+///
+/// Accepts a header row with name/height/weight/date columns, or bare rows in
+/// the order: Name, Height (cm), Weight (kg) [, Date].
+MeasurementImportResult mapMeasurementRows(List<List<String>> rows) {
+  final errors = <String>[];
+  if (rows.isEmpty) {
+    return const MeasurementImportResult(rows: [], errors: ['The file is empty.']);
+  }
+
+  final first = rows.first.map(_normalizeHeader).toList();
+  final colMap = <String, int>{};
+  var hasHeader = false;
+  for (final field in _measurementAliases.keys) {
+    final idx = first.indexWhere((h) => _measurementAliases[field]!.contains(h));
+    if (idx >= 0) {
+      colMap[field] = idx;
+      hasHeader = true;
+    }
+  }
+
+  final dataRows = hasHeader ? rows.skip(1).toList() : rows;
+  final result = <MeasurementImportRow>[];
+
+  double? parseNumber(String raw) =>
+      double.tryParse(raw.trim().replaceAll(RegExp(r'[^0-9.]'), ''));
+
+  for (var n = 0; n < dataRows.length; n += 1) {
+    final row = dataRows[n];
+    String get(String field, int fallbackIndex) {
+      final idx = colMap[field] ?? (hasHeader ? -1 : fallbackIndex);
+      if (idx < 0 || idx >= row.length) return '';
+      return row[idx].trim();
+    }
+
+    final name = get('name', 0);
+    final height = parseNumber(get('height', 1));
+    final weight = parseNumber(get('weight', 2));
+    if (name.isEmpty) {
+      errors.add('Row ${n + (hasHeader ? 2 : 1)}: missing name, skipped.');
+      continue;
+    }
+    if (height == null || weight == null || height <= 0 || weight <= 0) {
+      errors.add(
+        'Row ${n + (hasHeader ? 2 : 1)}: height/weight missing for $name, skipped.',
+      );
+      continue;
+    }
+    result.add(MeasurementImportRow(
+      fullName: name,
+      heightCm: height,
+      weightKg: weight,
+      date: get('date', 3),
+    ));
+  }
+
+  if (result.isEmpty && errors.isEmpty) {
+    errors.add('No height/weight rows were found in the file.');
+  }
+  return MeasurementImportResult(rows: result, errors: errors);
+}

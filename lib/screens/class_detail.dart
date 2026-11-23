@@ -94,29 +94,54 @@ class _ClassDetailScreenState extends State<ClassDetailScreen> {
                   '${section.curriculum.label}'
                   '${section.archived ? ' · archived' : ''}',
               onBack: () => Navigator.of(context).pop(),
-              right: Material(
-                color: AppColors.white,
-                shape: const CircleBorder(
-                  side: BorderSide(color: AppColors.border, width: 1.5),
-                ),
-                child: InkWell(
-                  customBorder: const CircleBorder(),
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) =>
-                          SectionFormScreen(editingId: widget.sectionId),
+              right: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Material(
+                    color: AppColors.white,
+                    shape: const CircleBorder(
+                      side: BorderSide(color: AppColors.border, width: 1.5),
+                    ),
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: () => _copyClass(state, section),
+                      child: const SizedBox(
+                        width: 40,
+                        height: 40,
+                        child: Icon(
+                          Ionicons.copyOutline,
+                          size: 19,
+                          color: AppColors.navy,
+                        ),
+                      ),
                     ),
                   ),
-                  child: SizedBox(
-                    width: 40,
-                    height: 40,
-                    child: Icon(
-                      Ionicons.createOutline,
-                      size: 20,
-                      color: AppColors.navy,
+                  const SizedBox(width: 8),
+                  Material(
+                    color: AppColors.white,
+                    shape: const CircleBorder(
+                      side: BorderSide(color: AppColors.border, width: 1.5),
+                    ),
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              SectionFormScreen(editingId: widget.sectionId),
+                        ),
+                      ),
+                      child: const SizedBox(
+                        width: 40,
+                        height: 40,
+                        child: Icon(
+                          Ionicons.createOutline,
+                          size: 20,
+                          color: AppColors.navy,
+                        ),
+                      ),
                     ),
                   ),
-                ),
+                ],
               ),
             ),
             Expanded(
@@ -371,6 +396,38 @@ class _ClassDetailScreenState extends State<ClassDetailScreen> {
                                           color: AppColors.textSoft,
                                         ),
                                       ),
+                                      if (state
+                                              .learnerAttendance(
+                                                section.id,
+                                                student.id,
+                                                term: state.activeTerm,
+                                              )
+                                              .absent >=
+                                          3)
+                                        Padding(
+                                          padding: const EdgeInsets.only(top: 3),
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 7,
+                                              vertical: 2,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFFFDE4E1),
+                                              borderRadius:
+                                                  BorderRadius.circular(999),
+                                            ),
+                                            child: Text(
+                                              '${state.learnerAttendance(section.id, student.id, term: state.activeTerm).absent} '
+                                              'absences this term',
+                                              style: const TextStyle(
+                                                fontFamily: 'Poppins',
+                                                fontSize: 10,
+                                                fontWeight: AppFonts.semibold,
+                                                color: AppColors.red,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
                                     ],
                                   ),
                                 ),
@@ -474,6 +531,135 @@ class _ClassDetailScreenState extends State<ClassDetailScreen> {
     if (confirmed != true || !mounted) return;
     state.archiveSection(section.id);
     Navigator.of(context).pop();
+  }
+
+  /// Copies this class into another school year (subjects, weights, and
+  /// optionally the learners with their BMI history).
+  Future<void> _copyClass(AppState state, Section section) async {
+    final name = TextEditingController(text: section.section);
+    final years = state.schoolYearNames;
+    var year = state.activeSchoolYear ?? currentSchoolYear();
+    var withStudents = true;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          backgroundColor: AppColors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppRadius.lg),
+          ),
+          title: const Text(
+            'Copy this class',
+            style: TextStyle(
+              fontSize: 17,
+              fontWeight: AppFonts.bold,
+              color: AppColors.navyDark,
+            ),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Subjects, term spans and grading weights are copied, so a new '
+                  'school year starts ready. Scores and attendance are not copied.',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    color: AppColors.textSoft,
+                    height: 1.45,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: name,
+                  textCapitalization: TextCapitalization.words,
+                  decoration: const InputDecoration(
+                    labelText: 'Section name',
+                    border: OutlineInputBorder(
+                      borderRadius:
+                          BorderRadius.all(Radius.circular(AppRadius.md)),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                const Text(
+                  'School year',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: AppFonts.semibold,
+                    color: AppColors.textSoft,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final option in years)
+                      AppChip(
+                        label: option,
+                        active: option == year,
+                        onTap: () => setDialogState(() => year = option),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                CheckboxListTile(
+                  value: withStudents,
+                  onChanged: (value) =>
+                      setDialogState(() => withStudents = value ?? false),
+                  contentPadding: EdgeInsets.zero,
+                  activeColor: AppColors.navy,
+                  title: const Text(
+                    'Copy the learners too',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: AppFonts.medium,
+                      color: AppColors.text,
+                    ),
+                  ),
+                  subtitle: const Text(
+                    'Includes their BMI history. Remove learners who graduated '
+                    'from the new roster afterwards.',
+                    style: TextStyle(fontSize: 11, color: AppColors.textSoft),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            AppButton(
+              label: 'Cancel',
+              variant: ButtonVariant.ghost,
+              onTap: () => Navigator.of(dialogContext).pop(false),
+            ),
+            AppButton(
+              label: 'Create copy',
+              onTap: () => Navigator.of(dialogContext).pop(true),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      name.dispose();
+      return;
+    }
+
+    final created = state.copySection(
+      sourceId: section.id,
+      schoolYear: year.trim().isEmpty ? section.schoolYear : year.trim(),
+      sectionName: name.text,
+      withStudents: withStudents,
+    );
+    name.dispose();
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => ClassDetailScreen(sectionId: created.id),
+      ),
+    );
   }
 
   Future<void> _import(AppState state) async {

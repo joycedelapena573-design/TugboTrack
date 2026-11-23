@@ -13,6 +13,7 @@ import '../services/grading.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 import '../widgets/ui.dart';
+import 'score_grid.dart';
 import 'section_form.dart';
 import 'student_profile.dart';
 import 'subject_form.dart';
@@ -131,16 +132,36 @@ class _GradesScreenState extends State<GradesScreen> {
             subtitle:
                 '${section.title} · SY ${section.schoolYear} · ${termLabel(_term)}',
             onBack: () => Navigator.of(context).maybePop(),
-            right: _RoundButton(
-              icon: Ionicons.settingsOutline,
-              onTap: activeSubject == null
-                  ? null
-                  : () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) =>
-                              SubjectFormScreen(subjectId: activeSubject.id),
-                        ),
-                      ),
+            right: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _RoundButton(
+                  icon: Ionicons.gridOutline,
+                  onTap: activeSubject == null
+                      ? null
+                      : () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => ScoreGridScreen(
+                                subjectId: activeSubject.id,
+                                term: _term,
+                              ),
+                            ),
+                          ),
+                ),
+                const SizedBox(width: 8),
+                _RoundButton(
+                  icon: Ionicons.settingsOutline,
+                  onTap: activeSubject == null
+                      ? null
+                      : () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => SubjectFormScreen(
+                                subjectId: activeSubject.id,
+                              ),
+                            ),
+                          ),
+                ),
+              ],
             ),
           ),
           if (classes.length > 1)

@@ -59,6 +59,7 @@ class _StudentProfileScreenState extends State<StudentProfileScreen> {
         state.backupData(),
         section,
         student,
+        comment: state.reportCommentFor(student.id),
       );
       final name = 'report-card-${_slug(student.fullName)}.pdf';
       if (print) {
@@ -73,6 +74,72 @@ class _StudentProfileScreenState extends State<StudentProfileScreen> {
     } finally {
       if (mounted) setState(() => _reportBusy = null);
     }
+  }
+
+  /// Teacher's remark printed at the bottom of the report card.
+  Future<void> _editRemark(BuildContext context, Student student) async {
+    final state = context.read<AppState>();
+    final controller = TextEditingController(
+      text: state.reportCommentFor(student.id),
+    );
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: AppColors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.lg),
+        ),
+        title: const Text(
+          "Teacher's remark",
+          style: TextStyle(
+            fontSize: 17,
+            fontWeight: AppFonts.bold,
+            color: AppColors.navyDark,
+          ),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Printed on this learner’s report card, under the grades. '
+              'Leave it empty to remove the remark.',
+              style: TextStyle(
+                fontSize: 12.5,
+                color: AppColors.textSoft,
+                height: 1.45,
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              maxLines: 4,
+              maxLength: 300,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(
+                hintText: 'e.g. Shows steady improvement in written work.',
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.all(Radius.circular(AppRadius.md)),
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          AppButton(
+            label: 'Cancel',
+            variant: ButtonVariant.ghost,
+            onTap: () => Navigator.of(dialogContext).pop(false),
+          ),
+          AppButton(
+            label: 'Save remark',
+            onTap: () => Navigator.of(dialogContext).pop(true),
+          ),
+        ],
+      ),
+    );
+    if (saved == true) state.setReportComment(student.id, controller.text);
+    controller.dispose();
   }
 
   @override
@@ -286,6 +353,11 @@ class _StudentProfileScreenState extends State<StudentProfileScreen> {
                             ),
                           ),
                         ],
+                      ),
+                      const SizedBox(height: 10),
+                      _RemarkRow(
+                        comment: state.reportCommentFor(student.id),
+                        onTap: () => _editRemark(context, student),
                       ),
                     ],
                   ),
@@ -652,6 +724,56 @@ class _StudentProfileScreenState extends State<StudentProfileScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _RemarkRow extends StatelessWidget {
+  const _RemarkRow({required this.comment, required this.onTap});
+
+  final String comment;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppColors.bg,
+      borderRadius: BorderRadius.circular(AppRadius.md),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(AppRadius.md),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: Row(
+            children: [
+              const Icon(Ionicons.chatbubbleEllipsesOutline,
+                  size: 17, color: AppColors.navy),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  comment.isEmpty ? "Add a teacher's remark" : comment,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontStyle:
+                        comment.isEmpty ? FontStyle.italic : FontStyle.normal,
+                    color:
+                        comment.isEmpty ? AppColors.textSoft : AppColors.text,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+              const Icon(Ionicons.createOutline,
+                  size: 16, color: AppColors.textFaint),
+            ],
+          ),
+        ),
       ),
     );
   }

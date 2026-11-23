@@ -46,6 +46,13 @@ class _SubjectFormScreenState extends State<SubjectFormScreen> {
     super.initState();
     _name = TextEditingController();
     final existing = _existing();
+    if (existing == null) {
+      // New subjects start from the weights the teacher used last time.
+      final remembered = context.read<AppState>().lastSubjectWeights;
+      if (remembered != null) {
+        _weights = Map<AssessmentCategory, double>.from(remembered);
+      }
+    }
     if (existing != null) {
       _name.text = existing.name;
       _weights = Map<AssessmentCategory, double>.from(existing.weights);

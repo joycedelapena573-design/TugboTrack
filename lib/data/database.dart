@@ -44,6 +44,16 @@ abstract final class SettingsKey {
   static const schoolLogoUri = 'schoolLogoUri';
   static const legacyMigrated = 'legacyMigrated';
   static const schemaVersion = 'schemaVersion';
+  static const largeText = 'largeText';
+  static const tipsSeen = 'tipsSeen';
+  static const lastBackupAt = 'lastBackupAt';
+  static const lastWeights = 'lastWeights';
+
+  /// Per-learner report-card remark: `comment:<studentId>`.
+  static const commentPrefix = 'comment:';
+
+  /// Last attendance date worked on: `attendanceDate:<sectionId>`.
+  static const attendanceDatePrefix = 'attendanceDate:';
 }
 
 /// Current schema version. Version 1 was the quarterly build; version 2 is the
@@ -73,7 +83,11 @@ class PersistedData {
     required this.academicTerms,
     required this.termGrades,
     required this.finalGrades,
+    this.kv = const {},
   });
+
+  /// Raw settings rows (preferences, report-card comments, ...).
+  final Map<String, String> kv;
 
   final String teacherName;
   final String? activeSectionId;
@@ -93,6 +107,26 @@ class PersistedData {
   final Map<String, TermGradeRecord> termGrades;
   final Map<String, FinalGradeRecord> finalGrades;
 }
+
+/// Summary of a backup file shown before it is restored.
+class BackupPreview {
+  const BackupPreview({required this.schemaVersion, required this.counts});
+
+  final int schemaVersion;
+  final Map<String, int> counts;
+
+  int get classes => counts['classes'] ?? 0;
+  int get students => counts['students'] ?? 0;
+  int get subjects => counts['subjects'] ?? 0;
+  int get attendanceDays => counts['attendance'] ?? 0;
+  int get bmiRecords => counts['bmi_records'] ?? 0;
+
+  /// True when the file was written by a newer app version than this build.
+  bool get isNewerThanApp => schemaVersion > schemaVersionOfApp;
+}
+
+/// Schema version this build understands (mirrors [schemaVersion]).
+const int schemaVersionOfApp = schemaVersion;
 
 class DatabaseService {
   DatabaseService([this._databasePath]);
@@ -1440,7 +1474,44 @@ class DatabaseService {
       academicTerms: academicTerms,
       termGrades: termGrades,
       finalGrades: finalGrades,
+      kv: kv,
     );
+  }
+
+  /// Reads the record counts and schema version of a backup file without
+  /// touching the live database (used before a restore).
+  Future<BackupPreview> inspectBackup(String path) async {
+    final file = File(path);
+    if (!await file.exists()) {
+      throw const FileSystemException('The selected backup file is missing.');
+    }
+    final db = await openDatabase(path, readOnly: true);
+    try {
+      final versionRows = await db.rawQuery('PRAGMA user_version');
+      final version = versionRows.isEmpty
+          ? 0
+          : (versionRows.first.values.first as num?)?.toInt() ?? 0;
+      final counts = <String, int>{};
+      for (final table in const [
+        'classes',
+        'students',
+        'subjects',
+        'assessments',
+        'student_scores',
+        'attendance',
+        'bmi_records',
+      ]) {
+        try {
+          final rows = await db.rawQuery('SELECT COUNT(*) AS c FROM $table');
+          counts[table] = (rows.first['c'] as num?)?.toInt() ?? 0;
+        } catch (_) {
+          counts[table] = 0;
+        }
+      }
+      return BackupPreview(schemaVersion: version, counts: counts);
+    } finally {
+      await db.close();
+    }
   }
 
   /* ------------------------------- backup ---------------------------------- */

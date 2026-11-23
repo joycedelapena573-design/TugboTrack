@@ -433,6 +433,60 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 ),
 
                 _ReportCard(
+                  icon: Ionicons.readerOutline,
+                  title: 'Report Cards (whole section)',
+                  subtitle: 'One printable report card per learner in '
+                      '${section.section}, with each saved remark.',
+                  child: roster.isEmpty
+                      ? null
+                      : _ActionRow(
+                          busy: _busy != null,
+                          actions: [
+                            _Action(
+                              label: 'Print all',
+                              icon: Ionicons.printOutline,
+                              onTap: () => _run(
+                                'Preparing the report cards…',
+                                () async {
+                                  final bytes = await reports
+                                      .buildSectionReportCardsPdfBytes(
+                                    data,
+                                    section,
+                                    comments: state.reportComments,
+                                  );
+                                  await reports.printPdfBytes(
+                                    bytes,
+                                    name:
+                                        'report-cards-${_slug(section.title)}',
+                                  );
+                                },
+                              ),
+                            ),
+                            _Action(
+                              label: 'Share all',
+                              icon: Ionicons.shareSocialOutline,
+                              onTap: () => _run(
+                                'Preparing the report cards…',
+                                () async {
+                                  final bytes = await reports
+                                      .buildSectionReportCardsPdfBytes(
+                                    data,
+                                    section,
+                                    comments: state.reportComments,
+                                  );
+                                  await reports.sharePdfBytes(
+                                    bytes,
+                                    name:
+                                        'report-cards-${_slug(section.title)}.pdf',
+                                  );
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                ),
+
+                _ReportCard(
                   icon: Ionicons.cloudDownloadOutline,
                   title: 'Full CSV Backup',
                   subtitle: 'Every class, learner, assessment, score, attendance '
@@ -449,6 +503,21 @@ class _ReportsScreenState extends State<ReportsScreen> {
                           await shareFile(
                             path,
                             title: 'TugboTrack backup',
+                            origin: origin,
+                          );
+                        }),
+                      ),
+                      _Action(
+                        label: 'Export school year',
+                        icon: Ionicons.folderOpenOutline,
+                        onTap: () => _run('Exporting the school year…', () async {
+                          final origin = shareOriginOf(context);
+                          final year = state.activeSchoolYear ??
+                              currentSchoolYear();
+                          final paths = await exportSchoolYear(data, year);
+                          await shareFiles(
+                            paths,
+                            title: 'TugboTrack $year export',
                             origin: origin,
                           );
                         }),

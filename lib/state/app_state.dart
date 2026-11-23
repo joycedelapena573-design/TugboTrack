@@ -3,12 +3,15 @@
 /// `data/database.dart`) and every mutation schedules an automatic CSV backup.
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
 
 import '../data/database.dart';
 import '../models/models.dart';
+import '../services/attention.dart';
 import '../services/backup.dart';
 import '../services/grading.dart';
 import '../utils/format.dart';
@@ -42,6 +45,26 @@ class AppState extends ChangeNotifier {
   /// Teacher-chosen school logo file path; null = bundled default.
   String? schoolLogoUri;
 
+  /// Larger in-app text for classroom use (persisted).
+  bool largeText = false;
+
+  /// Whether the first-run tips were already shown.
+  bool tipsSeen = false;
+
+  /// ISO timestamp of the last full database backup.
+  String? lastBackupAt;
+
+  /// Per-learner report-card remarks, keyed by student id.
+  Map<String, String> reportComments = {};
+
+  /// Last attendance date worked on, keyed by section id.
+  Map<String, String> attendanceDates = {};
+
+  /// Weights of the most recently saved subject (used as the default).
+  String _lastWeightsRaw = '';
+
+  bool _autoBackupChecked = false;
+
   /* --------------------------------- loading -------------------------------- */
 
   /// Reads the SQLite database back into memory once at launch (importing
@@ -68,6 +91,21 @@ class AppState extends ChangeNotifier {
       academicTerms = data.academicTerms;
       termGrades = data.termGrades;
       finalGrades = data.finalGrades;
+      largeText = data.kv[SettingsKey.largeText] == 'true';
+      tipsSeen = data.kv[SettingsKey.tipsSeen] == 'true';
+      lastBackupAt = data.kv[SettingsKey.lastBackupAt];
+      _lastWeightsRaw = data.kv[SettingsKey.lastWeights] ?? '';
+      reportComments = {
+        for (final entry in data.kv.entries)
+          if (entry.key.startsWith(SettingsKey.commentPrefix))
+            entry.key.substring(SettingsKey.commentPrefix.length): entry.value,
+      };
+      attendanceDates = {
+        for (final entry in data.kv.entries)
+          if (entry.key.startsWith(SettingsKey.attendanceDatePrefix))
+            entry.key.substring(SettingsKey.attendanceDatePrefix.length):
+                entry.value,
+      };
 
       // Seed the built-in presets in memory as well, so a fresh install shows
       // them even before the first settings change is written.
@@ -85,6 +123,7 @@ class AppState extends ChangeNotifier {
     }
     hydrated = true;
     notifyListeners();
+    unawaited(maybeAutoBackup());
   }
 
   void _changed() {
@@ -126,6 +165,80 @@ class AppState extends ChangeNotifier {
     schoolLogoUri = uri;
     _db.saveSetting(SettingsKey.schoolLogoUri, uri);
     notifyListeners();
+  }
+
+  /// Larger text across the app (classroom / large-screen use).
+  void setLargeText(bool value) {
+    largeText = value;
+    _db.saveSetting(SettingsKey.largeText, '$value');
+    notifyListeners();
+  }
+
+  void markTipsSeen() {
+    if (tipsSeen) return;
+    tipsSeen = true;
+    _db.saveSetting(SettingsKey.tipsSeen, 'true');
+    notifyListeners();
+  }
+
+  void resetTips() {
+    tipsSeen = false;
+    _db.saveSetting(SettingsKey.tipsSeen, null);
+    notifyListeners();
+  }
+
+  /* --------------------------- report card remarks -------------------------- */
+
+  String reportCommentFor(String studentId) =>
+      reportComments[studentId] ?? '';
+
+  void setReportComment(String studentId, String text) {
+    final clean = text.trim();
+    if (clean.isEmpty) {
+      reportComments.remove(studentId);
+      _db.saveSetting('${SettingsKey.commentPrefix}$studentId', null);
+    } else {
+      reportComments[studentId] = clean;
+      _db.saveSetting('${SettingsKey.commentPrefix}$studentId', clean);
+    }
+    notifyListeners();
+    _scheduleBackup();
+  }
+
+  /* ---------------------------- last attendance day ------------------------- */
+
+  String? attendanceDateFor(String sectionId) => attendanceDates[sectionId];
+
+  void setAttendanceDate(String sectionId, String date) {
+    attendanceDates[sectionId] = date;
+    _db.saveSetting('${SettingsKey.attendanceDatePrefix}$sectionId', date);
+    notifyListeners();
+  }
+
+  /* ------------------------------ weight memory ----------------------------- */
+
+  /// Weights most recently saved on a subject, used to pre-fill new subjects.
+  Weights? get lastSubjectWeights {
+    if (_lastWeightsRaw.isEmpty) return null;
+    final weights = <AssessmentCategory, double>{};
+    for (final part in _lastWeightsRaw.split(',')) {
+      final pieces = part.split(':');
+      if (pieces.length != 2) continue;
+      final category = AssessmentCategory.fromName(pieces[0]);
+      final value = double.tryParse(pieces[1]);
+      if (category == null || value == null) continue;
+      weights[category] = value;
+    }
+    if (weights.length != AssessmentCategory.values.length) return null;
+    return weights;
+  }
+
+  void _rememberWeights(Weights weights) {
+    _lastWeightsRaw = [
+      for (final category in AssessmentCategory.values)
+        '${category.name}:${weights[category] ?? 0}',
+    ].join(',');
+    _db.saveSetting(SettingsKey.lastWeights, _lastWeightsRaw);
   }
 
   /* ------------------------------ school calendar --------------------------- */
@@ -418,6 +531,7 @@ class AppState extends ChangeNotifier {
       name: name.trim(),
       teacherName: teacherName.trim(),
       weights: weights ??
+          lastSubjectWeights ??
           Map<AssessmentCategory, double>.from(depedAcademicWeights),
       transmute: transmute,
       termStart: termStart.clamp(1, 3),
@@ -430,6 +544,7 @@ class AppState extends ChangeNotifier {
         : value;
     subjects[fixed.id] = fixed;
     _db.putSubject(fixed);
+    _rememberWeights(fixed.weights);
     _changed();
     return fixed;
   }
@@ -460,7 +575,87 @@ class AppState extends ChangeNotifier {
     }
     subjects[id] = next;
     _db.putSubject(next);
+    _rememberWeights(next.weights);
     _changed();
+  }
+
+  /// Copies a class into another school year: the same subjects, term spans and
+  /// grading weights, plus (optionally) the learners and their BMI history.
+  /// Scores and attendance stay with the original class.
+  Section copySection({
+    required String sourceId,
+    required String schoolYear,
+    required String sectionName,
+    bool withStudents = true,
+  }) {
+    final source = sections[sourceId];
+    if (source == null) {
+      throw StateError('The class to copy no longer exists.');
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final target = Section(
+      id: newId(),
+      gradeLevel: source.gradeLevel,
+      section: sectionName.trim().isEmpty ? source.section : sectionName.trim(),
+      schoolYear: schoolYear,
+      curriculum: source.curriculum,
+      createdAt: now,
+    );
+    sections[target.id] = target;
+    _db.putSection(target);
+
+    for (final subject in subjectsOf(sourceId)) {
+      final copy = Subject(
+        id: newId(),
+        sectionId: target.id,
+        name: subject.name,
+        teacherName: subject.teacherName,
+        weights: Map<AssessmentCategory, double>.from(subject.weights),
+        transmute: subject.transmute,
+        termStart: subject.termStart,
+        termEnd: subject.termEnd,
+        configId: subject.configId,
+        createdAt: now,
+      );
+      subjects[copy.id] = copy;
+      _db.putSubject(copy);
+    }
+
+    if (withStudents) {
+      for (final student in studentsOf(sourceId)) {
+        final copy = Student(
+          id: newId(),
+          sectionId: target.id,
+          seatNumber: student.seatNumber,
+          fullName: student.fullName,
+          lrn: student.lrn,
+          gender: student.gender,
+          birthday: student.birthday,
+          guardianName: student.guardianName,
+          guardianContact: student.guardianContact,
+          createdAt: now,
+        );
+        students[copy.id] = copy;
+        _db.putStudent(copy);
+        for (final record in bmiHistory(student.id)) {
+          final bmiCopy = BmiRecord(
+            id: '${copy.id}::${record.date}',
+            studentId: copy.id,
+            date: record.date,
+            heightCm: record.heightCm,
+            weightKg: record.weightKg,
+            recordedAt: record.recordedAt,
+          );
+          bmi[bmiCopy.id] = bmiCopy;
+          _db.putBmi(bmiCopy);
+        }
+      }
+    }
+
+    activeSectionId = target.id;
+    _db.saveSetting(SettingsKey.activeSectionId, target.id);
+    _changed();
+    return target;
   }
 
   void deleteSubject(String id) {
@@ -797,6 +992,69 @@ class AppState extends ChangeNotifier {
     _changed();
   }
 
+  /* ------------------------------ attention list ---------------------------- */
+
+  /// Small checklist of records that still need the teacher's attention.
+  List<AttentionItem> attention({int? term, String? sectionId}) =>
+      attentionItems(
+        backupData(),
+        term: term ?? activeTerm,
+        calendar: academicTerms,
+        sectionId: sectionId,
+        schoolYear: activeSchoolYear,
+      );
+
+  /// This learner's attendance totals in a class (optionally one term).
+  LearnerAttendance learnerAttendance(
+    String sectionId,
+    String studentId, {
+    int? term,
+  }) {
+    final info = term == null
+        ? null
+        : termsOf(activeSchoolYear).where((t) => t.term == term).firstOrNull;
+    var present = 0, late = 0, absent = 0, excused = 0, recorded = 0;
+    for (final day in attendance.values) {
+      if (day.sectionId != sectionId) continue;
+      if (info != null && info.start.isNotEmpty && info.end.isNotEmpty) {
+        if (day.date.compareTo(info.start) < 0 ||
+            day.date.compareTo(info.end) > 0) {
+          continue;
+        }
+      }
+      final status = day.statuses[studentId];
+      if (status == null) continue;
+      recorded += 1;
+      switch (status) {
+        case AttendanceStatus.present:
+          present += 1;
+        case AttendanceStatus.late:
+          late += 1;
+        case AttendanceStatus.absent:
+          absent += 1;
+        case AttendanceStatus.excused:
+          excused += 1;
+      }
+    }
+    return LearnerAttendance(
+      recorded: recorded,
+      present: present,
+      late: late,
+      absent: absent,
+      excused: excused,
+    );
+  }
+
+  /// Latest date with recorded attendance in a class, or null.
+  String? lastMarkedDate(String sectionId) {
+    String? latest;
+    for (final day in attendance.values) {
+      if (day.sectionId != sectionId) continue;
+      if (latest == null || day.date.compareTo(latest) > 0) latest = day.date;
+    }
+    return latest;
+  }
+
   /* -------------------------------- selectors -------------------------------- */
 
   List<Student> studentsOf(String? sectionId, {bool includeArchived = false}) {
@@ -904,8 +1162,64 @@ class AppState extends ChangeNotifier {
 
   /// Restores [source] over the live database and reloads the store.
   Future<void> restoreDatabase(String source) async {
+    final preview = await _db.inspectBackup(source);
+    if (preview.isNewerThanApp) {
+      throw StateError(
+        'This backup was written by a newer version of TugboTrack. '
+        'Update the app before restoring it.',
+      );
+    }
     await _db.restoreFrom(source);
     await load();
+  }
+
+  /// Reads the counts of a backup file so the restore dialog can show them.
+  Future<BackupPreview> previewBackup(String source) => _db.inspectBackup(source);
+
+  /// Writes a timestamped copy of the SQLite database and keeps the newest
+  /// copies (see [pruneDatabaseBackups]).
+  Future<File?> backupNow() async {
+    try {
+      final dir = await databaseBackupDirPath();
+      final file = await _db.backupTo(
+        p.join(dir, 'tugbotrack-${backupStamp()}.db'),
+      );
+      await pruneDatabaseBackups();
+      final at = DateTime.now().toIso8601String();
+      lastBackupAt = at;
+      _db.saveSetting(SettingsKey.lastBackupAt, at);
+      notifyListeners();
+      return file;
+    } catch (error) {
+      // ignore: avoid_print
+      print('[backup] could not write the automatic database backup: $error');
+      return null;
+    }
+  }
+
+  /// Runs once per app session: copies the database when the last backup is
+  /// more than a day old.
+  Future<void> maybeAutoBackup() async {
+    if (_autoBackupChecked) return;
+    _autoBackupChecked = true;
+    if (sections.isEmpty && students.isEmpty) return;
+    final last = lastBackupAt == null
+        ? null
+        : DateTime.tryParse(lastBackupAt!);
+    if (last != null &&
+        DateTime.now().difference(last) < const Duration(hours: 24)) {
+      return;
+    }
+    await backupNow();
+  }
+
+  /// Whole days since the last database backup, or null when never backed up.
+  int? get backupAgeDays {
+    final raw = lastBackupAt;
+    if (raw == null) return null;
+    final at = DateTime.tryParse(raw);
+    if (at == null) return null;
+    return DateTime.now().difference(at).inDays;
   }
 
   Future<String> databasePath() => _db.databaseFilePath;

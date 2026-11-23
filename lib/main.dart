@@ -8,7 +8,6 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import 'screens/splash.dart';
@@ -18,7 +17,6 @@ import 'theme/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
   final appState = AppState();
   final appLock = AppLock();
@@ -47,6 +45,17 @@ class TisClassTrackApp extends StatelessWidget {
       title: 'TIS ClassTrack',
       debugShowCheckedModeBanner: false,
       theme: buildAppTheme(),
+      // The teacher can enlarge the app text; score grids and reports also
+      // work in landscape, so the device is free to rotate.
+      builder: (context, child) {
+        final large = context.watch<AppState>().largeText;
+        return MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            textScaler: TextScaler.linear(large ? 1.15 : 1.0),
+          ),
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
       home: const SplashScreen(),
     );
   }

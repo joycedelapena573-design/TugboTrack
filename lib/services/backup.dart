@@ -391,3 +391,124 @@ Future<void> shareFile(String path, {String? title, Rect? origin}) async {
     ),
   );
 }
+
+/// Opens the platform share sheet for several files at once.
+Future<void> shareFiles(
+  List<String> paths, {
+  String? title,
+  Rect? origin,
+}) async {
+  if (paths.isEmpty) return;
+  await SharePlus.instance.share(
+    ShareParams(
+      files: [for (final path in paths) XFile(path)],
+      title: title,
+      subject: title,
+      sharePositionOrigin: origin,
+    ),
+  );
+}
+
+/* --------------------------- whole school year ---------------------------- */
+
+/// One CSV per class (roster, attendance, final grades, every class record)
+/// written to the exports folder. Returns the file paths, newest first.
+Future<List<String>> exportSchoolYear(
+  BackupData data,
+  String schoolYear,
+) async {
+  final paths = <String>[];
+  final classes = data.sections.values
+      .where((section) => section.schoolYear == schoolYear)
+      .toList()
+    ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+
+  for (final section in classes) {
+    final buffer = StringBuffer()
+      ..writeln(buildFinalGradesCsv(data, section))
+      ..writeln()
+      ..writeln(buildAttendanceCsv(data, section));
+    for (final subject in data.subjectsOf(section.id)) {
+      for (final term in subject.activeTerms) {
+        buffer
+          ..writeln()
+          ..writeln(buildClassRecordCsv(data, section, subject, term));
+      }
+    }
+    final slug = _slug('${section.gradeLevel}-${section.section}');
+    paths.add(
+      await exportCsvFile('$schoolYear-$slug.csv', buffer.toString()),
+    );
+  }
+
+  paths.add(await exportCsvFile(
+    '$schoolYear-full-backup.csv',
+    buildFullBackupCsv(data),
+  ));
+  return paths;
+}
+
+String _slug(String value) => value
+    .toLowerCase()
+    .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+    .replaceAll(RegExp(r'^-+|-+$'), '');
+
+/* ------------------------------- auto backup ------------------------------ */
+
+/// Directory holding the rolling automatic database copies.
+Future<String> databaseBackupDirPath() async {
+  final docs = await getApplicationDocumentsDirectory();
+  final dir = Directory(p.join(docs.path, 'TugboTrack', 'database-backups'));
+  if (!await dir.exists()) await dir.create(recursive: true);
+  return dir.path;
+}
+
+/// Timestamp used in automatic backup file names.
+String backupStamp([DateTime? now]) {
+  final stamp = now ?? DateTime.now();
+  return '${stamp.year}${_two(stamp.month)}${_two(stamp.day)}'
+      '-${_two(stamp.hour)}${_two(stamp.minute)}';
+}
+
+/// Deletes the oldest `.db` backups, keeping [keep] of them.
+/// Returns the number of files removed.
+Future<int> pruneDatabaseBackups({int keep = 7}) async {
+  try {
+    final dir = Directory(await databaseBackupDirPath());
+    if (!await dir.exists()) return 0;
+    final files = await dir
+        .list()
+        .where((entry) => entry is File && entry.path.endsWith('.db'))
+        .cast<File>()
+        .toList();
+    files.sort((a, b) => b.path.compareTo(a.path));
+    var removed = 0;
+    for (final file in files.skip(keep)) {
+      await file.delete();
+      removed += 1;
+    }
+    return removed;
+  } catch (error) {
+    // ignore: avoid_print
+    print('[backup] could not prune old backups: $error');
+    return 0;
+  }
+}
+
+/// Newest automatic database backup, or null when none exists yet.
+Future<File?> latestDatabaseBackup() async {
+  try {
+    final dir = Directory(await databaseBackupDirPath());
+    if (!await dir.exists()) return null;
+    final files = await dir
+        .list()
+        .where((entry) => entry is File && entry.path.endsWith('.db'))
+        .cast<File>()
+        .toList();
+    if (files.isEmpty) return null;
+    files.sort((a, b) => b.path.compareTo(a.path));
+    return files.first;
+  } catch (_) {
+    return null;
+  }
+}

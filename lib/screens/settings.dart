@@ -12,11 +12,13 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 
+import '../data/database.dart' show BackupPreview;
 import '../models/models.dart';
 import '../services/backup.dart';
 import '../services/mpin.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
+import '../utils/format.dart';
 import '../widgets/school_logo.dart';
 import '../widgets/ui.dart';
 import 'reports.dart';
@@ -38,6 +40,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _confirmPin = TextEditingController();
   String _message = '';
   bool _saving = false;
+  bool _exporting = false;
 
   @override
   void initState() {
@@ -196,6 +199,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  /// Saves a timestamped copy of the database on the device (no share sheet).
+  Future<void> _backupNow() async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    setState(() => _saving = true);
+    final file = await context.read<AppState>().backupNow();
+    if (!mounted) return;
+    setState(() => _saving = false);
+    messenger?.showSnackBar(
+      SnackBar(
+        content: Text(
+          file == null
+              ? 'Could not write the backup. Please try again.'
+              : 'Backup saved: ${p.basename(file.path)}',
+        ),
+      ),
+    );
+  }
+
+  /// Every class record of the active school year, as CSV files, shared at once.
+  Future<void> _exportSchoolYear() async {
+    final state = context.read<AppState>();
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final origin = shareOriginOf(context);
+    final year = state.activeSchoolYear ?? currentSchoolYear();
+    setState(() => _exporting = true);
+    try {
+      final paths = await exportSchoolYear(state.backupData(), year);
+      if (paths.isEmpty) {
+        messenger?.showSnackBar(
+          const SnackBar(content: Text('No classes to export for this year.')),
+        );
+        return;
+      }
+      await shareFiles(
+        paths,
+        title: 'TugboTrack $year export',
+        origin: origin,
+      );
+    } catch (error) {
+      messenger?.showSnackBar(
+        SnackBar(content: Text('Could not export the school year: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _exporting = false);
+    }
+  }
+
   /// Replaces the database with a backup file after an explicit confirmation.
   Future<void> _restoreDatabase() async {
     final messenger = ScaffoldMessenger.maybeOf(context);
@@ -208,13 +258,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (path == null) return;
     if (!mounted) return;
 
+    BackupPreview? preview;
+    try {
+      preview = await context.read<AppState>().previewBackup(path);
+    } catch (_) {
+      preview = null;
+    }
+    if (!mounted) return;
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Restore this backup?'),
         content: Text(
-          'Every class, learner, score, grade and attendance record currently on '
-          'this device will be replaced by the contents of “${picked.name}”.',
+          [
+            'Every class, learner, score, grade and attendance record currently '
+                'on this device will be replaced by the contents of “${picked.name}”.',
+            if (preview != null)
+              '\nThis file holds ${preview.classes} class(es), '
+                  '${preview.students} learner(s), ${preview.subjects} subject(s), '
+                  '${preview.attendanceDays} attendance day(s) and '
+                  '${preview.bmiRecords} BMI record(s).',
+            if (preview?.isNewerThanApp ?? false)
+              '\nThis backup comes from a newer version of the app and cannot be '
+                  'restored until the app is updated.',
+          ].join(),
         ),
         actions: [
           AppButton(
@@ -231,6 +299,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
     if (confirmed != true || !mounted) return;
+    if (preview?.isNewerThanApp ?? false) return;
 
     setState(() => _saving = true);
     try {
@@ -502,6 +571,66 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ],
                     ),
                   ),
+                  const _SectionTitle('Display & Guidance'),
+                  AppCard(
+                    child: Column(
+                      children: [
+                        Row(
+                          children: [
+                            const Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Larger text',
+                                    style: TextStyle(
+                                      fontFamily: 'Poppins',
+                                      fontSize: 13.5,
+                                      fontWeight: AppFonts.semibold,
+                                      color: AppColors.navyDark,
+                                    ),
+                                  ),
+                                  Text(
+                                    'Makes names, scores and buttons easier to '
+                                    'read in class.',
+                                    style: TextStyle(
+                                      fontFamily: 'Poppins',
+                                      fontSize: 11.5,
+                                      color: AppColors.textSoft,
+                                      height: 1.4,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Switch(
+                              value: state.largeText,
+                              activeTrackColor: AppColors.navy,
+                              onChanged: (value) => context
+                                  .read<AppState>()
+                                  .setLargeText(value),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        AppButton(
+                          label: 'Show the welcome tips again',
+                          variant: ButtonVariant.ghost,
+                          icon: Ionicons.bulbOutline,
+                          onTap: () {
+                            context.read<AppState>().resetTips();
+                            ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'The tips will appear on the Home tab.',
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
                   const _SectionTitle('Data & Storage'),
                   AppCard(
                     child: Column(
@@ -520,6 +649,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           label: 'Storage',
                           value: 'Offline SQLite database',
                         ),
+                        _StorageRow(
+                          label: 'Last database backup',
+                          value: state.lastBackupAt == null
+                              ? 'Never'
+                              : '${state.backupAgeDays == 0 ? 'Today' : '${state.backupAgeDays} days ago'}'
+                                  ' · ${formatShortDate(state.lastBackupAt!.split('T').first)}',
+                        ),
                         FutureBuilder<String>(
                           future: autoBackupDirPath(),
                           builder: (context, snapshot) => _StorageRow(
@@ -536,6 +672,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           onTap: () => Navigator.of(context).push(
                             MaterialPageRoute(builder: (_) => const ReportsScreen()),
                           ),
+                        ),
+                        const SizedBox(height: 10),
+                        AppButton(
+                          label: 'Back up now',
+                          variant: ButtonVariant.secondary,
+                          icon: Ionicons.cloudDownloadOutline,
+                          loading: _saving,
+                          onTap: _backupNow,
+                        ),
+                        const SizedBox(height: 10),
+                        AppButton(
+                          label: 'Export school year (CSV)',
+                          variant: ButtonVariant.ghost,
+                          icon: Ionicons.folderOpenOutline,
+                          loading: _exporting,
+                          onTap: _exportSchoolYear,
                         ),
                         const SizedBox(height: 10),
                         AppButton(

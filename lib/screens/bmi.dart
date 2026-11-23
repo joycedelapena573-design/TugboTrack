@@ -2,12 +2,16 @@
 /// show the interpretation, and keep values private until revealed.
 library;
 
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:ionicons/ionicons.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
 import '../services/bmi.dart';
+import '../services/csv.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 import '../utils/format.dart';
@@ -49,6 +53,11 @@ class _BmiScreenState extends State<BmiScreen> {
   String _sectionId = '';
   String? _studentId;
   bool _revealed = false;
+
+  /// Draft height/weight per learner, kept if the entry dialog is closed by
+  /// accident (or the app shows the keyboard over it).
+  final Map<String, String> _draftHeight = {};
+  final Map<String, String> _draftWeight = {};
 
   @override
   void didChangeDependencies() {
@@ -101,8 +110,28 @@ class _BmiScreenState extends State<BmiScreen> {
             title: 'BMI Monitoring',
             subtitle: 'Height, weight and interpretation',
             onBack: () => Navigator.of(context).maybePop(),
-            right: InkWell(
-              onTap: () => setState(() => _revealed = !_revealed),
+            right: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Material(
+                  color: AppColors.white,
+                  shape: const CircleBorder(
+                    side: BorderSide(color: AppColors.border, width: 1.5),
+                  ),
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: _importMeasurements,
+                    child: const SizedBox(
+                      width: 38,
+                      height: 38,
+                      child: Icon(Ionicons.cloudUploadOutline,
+                          size: 19, color: AppColors.navy),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                InkWell(
+                  onTap: () => setState(() => _revealed = !_revealed),
               borderRadius: BorderRadius.circular(AppRadius.pill),
               child: Container(
                 padding:
@@ -135,7 +164,9 @@ class _BmiScreenState extends State<BmiScreen> {
                     ),
                   ],
                 ),
-              ),
+                ),
+                ),
+              ],
             ),
           ),
           Expanded(
@@ -489,12 +520,142 @@ class _BmiScreenState extends State<BmiScreen> {
         ],
       ),
     );
-    if (confirmed == true) state.deleteBmi(record.id);
+    if (confirmed != true || !mounted) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    state.deleteBmi(record.id);
+    messenger?.showSnackBar(
+      SnackBar(
+        content: Text('BMI record for $name deleted.'),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () => state.setBmi(
+                record.studentId,
+                record.date,
+                record.heightCm,
+                record.weightKg,
+              ),
+        ),
+      ),
+    );
+  }
+
+  /// Imports height/weight measurements from a CSV file and matches them to
+  /// this class's roster by learner name.
+  Future<void> _importMeasurements() async {
+    final state = context.read<AppState>();
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final picked = await FilePicker.pickFile(
+      type: FileType.custom,
+      allowedExtensions: const ['csv', 'txt'],
+    );
+    final path = picked?.path;
+    if (path == null) return;
+    final text = await File(path).readAsString();
+    final parsed = mapMeasurementRows(parseCsv(text));
+    if (!mounted) return;
+
+    final roster = _roster(state);
+    final matches = <String, MeasurementImportRow>{};
+    String normalize(String value) => value
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z ]'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    for (final row in parsed.rows) {
+      final target = roster.where((student) {
+        final name = normalize(student.fullName);
+        final wanted = normalize(row.fullName);
+        return name == wanted || name.contains(wanted) || wanted.contains(name);
+      }).firstOrNull;
+      if (target != null) matches[target.id] = row;
+    }
+
+    if (!mounted) return;
+    if (matches.isEmpty) {
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text(
+            parsed.errors.isNotEmpty
+                ? parsed.errors.first
+                : 'No learner in this class matched the file.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: AppColors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.lg),
+        ),
+        title: const Text(
+          'Import BMI measurements?',
+          style: TextStyle(
+            fontSize: 17,
+            fontWeight: AppFonts.bold,
+            color: AppColors.navyDark,
+          ),
+        ),
+        content: Text(
+          '${matches.length} learner${matches.length == 1 ? '' : 's'} matched. '
+          'Each measurement is saved on its own date; an entry with the same '
+          'date is updated.${parsed.errors.isEmpty ? '' : ' ${parsed.errors.length} row(s) skipped.'}',
+          style: const TextStyle(
+            fontSize: 13,
+            color: AppColors.textSoft,
+            height: 1.45,
+          ),
+        ),
+        actions: [
+          AppButton(
+            label: 'Cancel',
+            variant: ButtonVariant.ghost,
+            onTap: () => Navigator.of(dialogContext).pop(false),
+          ),
+          AppButton(
+            label: 'Import',
+            onTap: () => Navigator.of(dialogContext).pop(true),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    var imported = 0;
+    for (final entry in matches.entries) {
+      final row = entry.value;
+      final date = normalizeDate(row.date);
+      state.setBmi(entry.key, date, row.heightCm, row.weightKg);
+      imported += 1;
+    }
+    messenger?.showSnackBar(
+      SnackBar(content: Text('Imported $imported measurement(s).')),
+    );
+  }
+
+  /// Accepts YYYY-MM-DD or MM/DD/YYYY; falls back to today.
+  String normalizeDate(String raw) {
+    final iso = parseIsoDate(raw.trim());
+    if (iso != null) return toIsoDate(iso);
+    final slash =
+        RegExp(r'^(\d{1,2})/(\d{1,2})/(\d{4})$').firstMatch(raw.trim());
+    if (slash != null) {
+      final date = DateTime(
+        int.parse(slash.group(3)!),
+        int.parse(slash.group(1)!),
+        int.parse(slash.group(2)!),
+      );
+      return toIsoDate(date);
+    }
+    return todayIso();
   }
 
   Future<void> _openEntry(Student student) async {
-    final height = TextEditingController();
-    final weight = TextEditingController();
+    final height = TextEditingController(text: _draftHeight[student.id] ?? '');
+    final weight = TextEditingController(text: _draftWeight[student.id] ?? '');
     var date = todayIso();
     var error = '';
 
@@ -567,8 +728,10 @@ class _BmiScreenState extends State<BmiScreen> {
                             BorderRadius.all(Radius.circular(AppRadius.md)),
                       ),
                     ),
-                    onChanged: (_) =>
-                        setDialogState(() => error = ''),
+                    onChanged: (text) {
+                      _draftHeight[student.id] = text;
+                      setDialogState(() => error = '');
+                    },
                   ),
                   const SizedBox(height: 10),
                   TextField(
@@ -582,8 +745,10 @@ class _BmiScreenState extends State<BmiScreen> {
                             BorderRadius.all(Radius.circular(AppRadius.md)),
                       ),
                     ),
-                    onChanged: (_) =>
-                        setDialogState(() => error = ''),
+                    onChanged: (text) {
+                      _draftWeight[student.id] = text;
+                      setDialogState(() => error = '');
+                    },
                   ),
                   const SizedBox(height: 10),
                   InkWell(
@@ -721,6 +886,8 @@ class _BmiScreenState extends State<BmiScreen> {
                     return;
                   }
                   context.read<AppState>().setBmi(student.id, date, h, w);
+                  _draftHeight.remove(student.id);
+                  _draftWeight.remove(student.id);
                   Navigator.of(dialogContext).pop();
                 },
               ),
@@ -729,6 +896,8 @@ class _BmiScreenState extends State<BmiScreen> {
         },
       ),
     );
+    height.dispose();
+    weight.dispose();
   }
 }
 

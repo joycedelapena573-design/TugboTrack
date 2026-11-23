@@ -49,6 +49,27 @@ class SeatBoard extends StatefulWidget {
 class _SeatBoardState extends State<SeatBoard> {
   String _date = todayIso();
   AttendanceStatus _brush = AttendanceStatus.present;
+  bool _restoredDate = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_restoredDate) return;
+    _restoredDate = true;
+    // Reopen on the day the teacher was last marking for this class.
+    final remembered =
+        context.read<AppState>().attendanceDateFor(widget.sectionId);
+    if (remembered != null &&
+        remembered.isNotEmpty &&
+        remembered.compareTo(todayIso()) <= 0) {
+      _date = remembered;
+    }
+  }
+
+  void _setDate(String date) {
+    setState(() => _date = date);
+    context.read<AppState>().setAttendanceDate(widget.sectionId, date);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -78,10 +99,7 @@ class _SeatBoardState extends State<SeatBoard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _DateBar(
-            date: _date,
-            onChanged: (next) => setState(() => _date = next),
-          ),
+          _DateBar(date: _date, onChanged: _setDate),
           const SizedBox(height: 10),
           Row(
             children: [
@@ -324,15 +342,44 @@ class _DateBar extends StatelessWidget {
             icon: Ionicons.chevronBack,
             onTap: () => onChanged(addDays(date, -1)),
           ),
-          Text(
-            formatDayLabel(date),
-            style: const TextStyle(
-              fontFamily: 'Poppins',
-              fontSize: 14.5,
-              fontWeight: AppFonts.bold,
-              color: AppColors.navyDark,
+          const SizedBox(width: 6),
+          Expanded(
+            child: Column(
+              children: [
+                Text(
+                  formatDayLabel(date),
+                  style: const TextStyle(
+                    fontFamily: 'Poppins',
+                    fontSize: 14.5,
+                    fontWeight: AppFonts.bold,
+                    color: AppColors.navyDark,
+                  ),
+                ),
+                if (date != today)
+                  Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(AppRadius.pill),
+                      onTap: () => onChanged(today),
+                      child: const Padding(
+                        padding:
+                            EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        child: Text(
+                          'Back to today',
+                          style: TextStyle(
+                            fontFamily: 'Poppins',
+                            fontSize: 10.5,
+                            fontWeight: AppFonts.semibold,
+                            color: AppColors.blue,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
+          const SizedBox(width: 6),
           Opacity(
             opacity: canGoForward ? 1 : 0.35,
             child: _ArrowButton(
