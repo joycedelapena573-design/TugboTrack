@@ -391,16 +391,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       color: AppColors.textSoft,
                                     ),
                                   ),
-                                  SizedBox(height: 4),
-                                  Text(
-                                    'Shown below',
-                                    style: TextStyle(
-                                      fontFamily: 'Poppins',
-                                      fontSize: 12.5,
-                                      fontWeight: AppFonts.semibold,
-                                      color: AppColors.blue,
-                                    ),
-                                  ),
                                 ],
                               ),
                             ),

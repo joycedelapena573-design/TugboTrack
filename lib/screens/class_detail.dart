@@ -90,7 +90,8 @@ class _ClassDetailScreenState extends State<ClassDetailScreen> {
           children: [
             PageHeader(
               title: '${section.gradeLevel} — ${section.section}',
-              subtitle: 'SY ${section.schoolYear} · ${roster.length} students · '
+              subtitle: 'SY ${section.schoolYear} · ${roster.length} '
+                  '${roster.length == 1 ? 'student' : 'students'} · '
                   '${section.curriculum.label}'
                   '${section.archived ? ' · archived' : ''}',
               onBack: () => Navigator.of(context).pop(),

@@ -223,13 +223,15 @@ class _ScoreGridScreenState extends State<ScoreGridScreen> {
       );
     }
 
-    final sheet = state.ensureSheet(subject.id, _term);
+    // Never create a sheet during build; the Grade Book is where assessments
+    // are created, so a missing sheet simply means "nothing to score yet".
+    final sheet = state.sheetOf(subject.id, _term);
     final roster = state.studentsOf(section.id);
-    _syncControllers(state, sheet, roster);
+    if (sheet != null) _syncControllers(state, sheet, roster);
 
     final columns = <({AssessmentCategory category, AssessmentItem item})>[
       for (final category in AssessmentCategory.values)
-        for (final item in sheet.itemsOf(category))
+        for (final item in sheet?.itemsOf(category) ?? const <AssessmentItem>[])
           (category: category, item: item),
     ];
 
@@ -260,7 +262,7 @@ class _ScoreGridScreenState extends State<ScoreGridScreen> {
                     title: 'No learners',
                     subtitle: 'Add learners to this class first.',
                   )
-                : columns.isEmpty
+                : sheet == null || columns.isEmpty
                     ? const EmptyState(
                         icon: Ionicons.createOutline,
                         title: 'No assessments yet',
@@ -270,7 +272,7 @@ class _ScoreGridScreenState extends State<ScoreGridScreen> {
                       )
                     : SingleChildScrollView(
                         scrollDirection: Axis.vertical,
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 30),
+                        padding: const EdgeInsets.fromLTRB(8, 0, 8, 30),
                         child: SingleChildScrollView(
                           scrollDirection: Axis.horizontal,
                           child: Container(
@@ -307,36 +309,24 @@ class _ScoreGridScreenState extends State<ScoreGridScreen> {
                                       item,
                                     ),
                                   ),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 8,
-                                  ),
-                                  decoration: const BoxDecoration(
-                                    color: AppColors.ice,
-                                    borderRadius: BorderRadius.only(
-                                      bottomLeft:
-                                          Radius.circular(AppRadius.lg),
-                                      bottomRight:
-                                          Radius.circular(AppRadius.lg),
-                                    ),
-                                  ),
-                                  child: const Text(
-                                    'Type a score and press Enter (or tap '
-                                    'elsewhere) to save. Tap a column header to '
-                                    'fill the whole class at once.',
-                                    style: TextStyle(
-                                      fontSize: 10.5,
-                                      color: AppColors.textSoft,
-                                    ),
-                                  ),
-                                ),
                               ],
                             ),
                           ),
                         ),
                       ),
           ),
+          if (roster.isNotEmpty && sheet != null && columns.isNotEmpty)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 6, 16, 8),
+              child: Text(
+                'Type a score and press Enter (or tap elsewhere) to save. Tap a '
+                'column header to fill the whole class at once.',
+                style: TextStyle(
+                  fontSize: 10.5,
+                  color: AppColors.textSoft,
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -357,7 +347,7 @@ class _HeaderRow extends StatelessWidget {
       child: Row(
         children: [
           const SizedBox(
-            width: 150,
+            width: 140,
             child: Text(
               'Learner',
               style: TextStyle(
@@ -452,7 +442,7 @@ class _LearnerRow extends StatelessWidget {
       child: Row(
         children: [
           SizedBox(
-            width: 150,
+            width: 140,
             child: Text(
               student.fullName,
               maxLines: 2,
