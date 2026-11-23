@@ -30,7 +30,9 @@ class Screen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    // A Material ancestor is required by InkWell/InkResponse controls used
+    // directly in screens (page header actions, history rows).
+    return Material(
       color: AppColors.bg,
       child: SafeArea(
         bottom: false,
